@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="es-CL">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#754522">
+  <meta name="description" content="Control de ventas diario para tu emprendimiento de frutos secos.">
+  <title>Frutos del Valle · Control de ventas</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark" aria-hidden="true">✳</div>
+    <div><p class="eyebrow">FRUTOS DEL VALLE</p><h1>Control de ventas</h1></div>
+    <details class="more-menu">
+      <summary aria-label="Más opciones">⋯</summary>
+      <div class="menu-panel">
+        <button id="exportButton" type="button">Exportar respaldo</button>
+        <button id="importButton" type="button">Importar respaldo</button>
+      </div>
+    </details>
+  </header>
+
+  <main id="appMain">
+    <section class="tab-panel" id="catalogPanel" aria-labelledby="catalogHeading">
+      <div class="section-heading"><div><p class="eyebrow">TUS PRODUCTOS</p><h2 id="catalogHeading">Catálogo</h2></div><span id="productCount" class="count-pill">0 activos</span></div>
+      <div id="catalogList" class="card-list"></div>
+      <div id="catalogEmpty" class="empty-state"><span class="empty-icon" aria-hidden="true">🥜</span><h3>Tu catálogo comienza aquí</h3><p>Agrega tus productos para tenerlos listos al momento de vender.</p></div>
+      <button id="newProductButton" class="fab" type="button"><span aria-hidden="true">＋</span> Nuevo producto</button>
+    </section>
+
+    <section class="tab-panel hidden" id="salesPanel" aria-labelledby="salesHeading">
+      <div class="section-heading"><div><p class="eyebrow">REGISTRO DIARIO</p><h2 id="salesHeading">Vender hoy</h2></div><span class="today-dot" aria-hidden="true"></span></div>
+      <label class="field date-field"><span>Fecha de la jornada</span><input id="saleDate" type="date"></label>
+      <p id="saleDateHint" class="muted date-hint"></p>
+      <div id="salesList" class="card-list sales-list"></div>
+      <div id="salesEmpty" class="empty-state compact"><span class="empty-icon" aria-hidden="true">🧺</span><h3>No hay productos activos</h3><p>Agrega productos en el catálogo para comenzar.</p><button class="text-button" type="button" data-goto="catalog">Ir al catálogo</button></div>
+      <div class="sales-spacer"></div>
+      <aside class="sales-dock" aria-label="Totales y acciones de la jornada">
+        <div class="dock-totals"><div><span>Total del día</span><strong id="saleTotal">$0</strong></div><div class="package-total"><strong id="packageTotal">0</strong><span>paquetes</span></div></div>
+        <div class="dock-actions"><button id="clearSaleButton" class="button button-light" type="button" disabled>Borrar jornada</button><button id="saveSaleButton" class="button button-primary" type="button">Guardar jornada</button></div>
+      </aside>
+    </section>
+
+    <section class="tab-panel hidden" id="summaryPanel" aria-labelledby="summaryHeading">
+      <div class="section-heading"><div><p class="eyebrow">TUS NÚMEROS</p><h2 id="summaryHeading">Resumen</h2></div><span class="summary-mark" aria-hidden="true">↗</span></div>
+      <label class="field month-field"><span>Mes del resumen</span><input id="reportMonth" type="month"></label>
+      <div class="metrics-grid">
+        <article class="metric-card metric-featured"><span>Total del mes</span><strong id="monthTotal">$0</strong><small>Ingresos registrados</small></article>
+        <article class="metric-card"><span>Paquetes vendidos</span><strong id="monthPackages">0</strong><small>En el mes</small></article>
+        <article class="metric-card"><span>Días con ventas</span><strong id="monthDays">0</strong><small>Jornadas registradas</small></article>
+        <article class="metric-card"><span>Promedio por día con venta</span><strong id="monthAverage">$0</strong><small>Por jornada</small></article>
+      </div>
+      <section class="report-section"><div class="subheading"><div><p class="eyebrow">RENDIMIENTO</p><h3>Por producto</h3></div></div><div id="productReport" class="table-wrap"></div><p id="productReportEmpty" class="inline-empty hidden">Aún no hay ventas este mes.</p></section>
+      <section class="report-section days-section"><div class="subheading"><div><p class="eyebrow">HISTORIAL</p><h3>Por día</h3></div></div><div id="dayReport" class="day-list"></div><p id="dayReportEmpty" class="inline-empty hidden">No hay jornadas guardadas para este mes.</p></section>
+    </section>
+  </main>
+
+  <nav class="bottom-nav" aria-label="Navegación principal">
+    <button class="nav-item active" type="button" data-tab="catalog" aria-current="page"><span aria-hidden="true">▦</span><small>Catálogo</small></button>
+    <button class="nav-item" type="button" data-tab="sales"><span aria-hidden="true">＋</span><small>Vender hoy</small></button>
+    <button class="nav-item" type="button" data-tab="summary"><span aria-hidden="true">◷</span><small>Resumen</small></button>
+  </nav>
+
+  <dialog id="productDialog" class="product-dialog">
+    <form id="productForm" novalidate>
+      <div class="dialog-top"><div><p class="eyebrow">CATÁLOGO</p><h2 id="dialogTitle">Nuevo producto</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button></div>
+      <input id="productId" type="hidden">
+      <label class="field"><span>Nombre del producto</span><input id="productName" type="text" maxlength="60" placeholder="Ej. Almendras naturales" autocomplete="off" required></label>
+      <label class="field"><span>Precio por paquete</span><div class="price-input"><span>$</span><input id="productPrice" type="number" min="1" step="1" inputmode="numeric" placeholder="3500" required></div></label>
+      <p class="package-note"><span aria-hidden="true">✳</span> Paquete estándar de 80 g</p>
+      <p id="productFormError" class="form-error" role="alert"></p>
+      <div class="dialog-actions"><button class="button button-light" type="button" data-close-dialog>Cancelar</button><button class="button button-primary" type="submit">Guardar producto</button></div>
+    </form>
+  </dialog>
+  <input id="importFile" type="file" accept="application/json,.json" hidden>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js" defer></script>
+</body>
+</html>
