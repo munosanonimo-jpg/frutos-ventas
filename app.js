@@ -111,19 +111,20 @@ const Stock = {
 
 const Products = {
   active() { return db.products.filter((product) => product.active); },
-  add(name, price, cost, stockOptions = {}) {
+  add(name, price, cost, packageGrams, stockOptions = {}) {
     if (this.active().some((product) => product.name.trim().toLocaleLowerCase('es-CL') === name.trim().toLocaleLowerCase('es-CL'))) throw new Error('Ya existe un producto activo con ese nombre.');
-    const product = { id: makeId(), name: name.trim(), price, packageGrams: 80, active: true, createdAt: new Date().toISOString() };
+    const product = { id: makeId(), name: name.trim(), price, packageGrams, active: true, createdAt: new Date().toISOString() };
     if (cost !== undefined) product.cost = cost;
     this.applyStock(product, stockOptions);
     db.products.push(product);
     return Storage.save(db);
   },
-  edit(id, name, price, cost, stockOptions = {}) {
+  edit(id, name, price, cost, packageGrams, stockOptions = {}) {
     if (this.active().some((product) => product.id !== id && product.name.trim().toLocaleLowerCase('es-CL') === name.trim().toLocaleLowerCase('es-CL'))) throw new Error('Ya existe un producto activo con ese nombre.');
     const product = db.products.find((entry) => entry.id === id && entry.active);
     if (!product) throw new Error('No encontramos ese producto activo.');
     product.name = name.trim(); product.price = price;
+    product.packageGrams = packageGrams;
     if (cost === undefined) delete product.cost; else product.cost = cost;
     this.applyStock(product, stockOptions);
     return Storage.save(db);
@@ -228,13 +229,13 @@ const Sales = {
   renderProducts() {
     const list = byId('salesList'); list.replaceChildren();
     const visibleProducts = [...Products.active()];
-    for (const [productId, item] of editingItemSnapshots) if (!visibleProducts.some((product) => product.id === productId)) visibleProducts.push({ id: productId, name: item.productName, price: item.unitPrice, packageGrams: 80, active: false });
+    for (const [productId, item] of editingItemSnapshots) if (!visibleProducts.some((product) => product.id === productId)) { const storedProduct = db.products.find((product) => product.id === productId); visibleProducts.push({ id: productId, name: item.productName, price: item.unitPrice, packageGrams: storedProduct?.packageGrams ?? 80, active: false }); }
     for (const product of visibleProducts) {
       const card = document.createElement('article'); card.className = 'sales-product-card';
       const info = document.createElement('div'); info.className = 'product-info';
       const name = document.createElement('h3'); name.textContent = product.name;
       const original = editingItemSnapshots.get(product.id); const shownPrice = original?.unitPrice ?? product.price;
-      const price = document.createElement('span'); price.className = 'product-price'; price.textContent = `${CLP.format(shownPrice)} · 80 g${product.active ? '' : ' · dado de baja'}`;
+      const price = document.createElement('span'); price.className = 'product-price'; price.textContent = `${CLP.format(shownPrice)} · ${product.packageGrams} g${product.active ? '' : ' · dado de baja'}`;
       const subtotal = document.createElement('p'); subtotal.className = 'muted item-subtotal'; subtotal.textContent = `Subtotal: ${CLP.format(shownPrice * (pendingQuantities.get(product.id) || 0))}`;
       info.append(name, price, subtotal);
       let stockWarning = null; let stockAvailable = null;
@@ -447,12 +448,34 @@ function setTab(tab) {
   Stock.renderAlerts();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
-function openProductDialog(product = null) { byId('productForm').reset(); byId('productFormError').textContent = ''; byId('productId').value = product?.id || ''; byId('dialogTitle').textContent = product ? 'Editar producto' : 'Nuevo producto'; byId('productName').value = product?.name || ''; byId('productPrice').value = product?.price || ''; byId('productCost').value = product && Number.isInteger(product.cost) ? String(product.cost) : ''; byId('productTrackStock').checked = product?.trackStock === true; byId('productMinStock').value = Number.isInteger(product?.minStock) ? String(product.minStock) : ''; byId('productInitialStock').value = ''; byId('productInitialStockField').classList.toggle('hidden', !byId('productTrackStock').checked || Boolean(product?.stockStartDate)); byId('productInitialStock').required = byId('productTrackStock').checked && !product?.stockStartDate; byId('productStockSettings').classList.toggle('hidden', !byId('productTrackStock').checked); byId('productDialog').showModal(); setTimeout(() => byId('productName').focus(), 40); }
+function updateGramsFields() {
+  const selected = document.querySelector('input[name="productGramsChoice"]:checked'); const isCustom = selected?.value === 'other';
+  byId('productGramsCustomWrap').classList.toggle('hidden', !isCustom); byId('productGramsCustom').required = isCustom;
+  const grams = isCustom ? byId('productGramsCustom').value.trim() : selected?.value;
+  byId('productCostNote').textContent = grams ? `Lo que te cuesta cada paquete de ${grams} g` : 'Lo que te cuesta cada paquete, según los gramos elegidos';
+}
+function openProductDialog(product = null) {
+  byId('productForm').reset(); byId('productFormError').textContent = ''; byId('productId').value = product?.id || '';
+  byId('dialogTitle').textContent = product ? 'Editar producto' : 'Nuevo producto'; byId('productName').value = product?.name || '';
+  byId('productPrice').value = product?.price || ''; byId('productCost').value = product && Number.isInteger(product.cost) ? String(product.cost) : '';
+  const grams = product?.packageGrams ?? 80; const standardGrams = ['50', '80', '100', '150', '200', '250', '500'];
+  const matchingChoice = standardGrams.includes(String(grams)) ? String(grams) : 'other';
+  document.querySelectorAll('input[name="productGramsChoice"]').forEach((radio) => { radio.checked = radio.value === matchingChoice; });
+  byId('productGramsCustom').value = matchingChoice === 'other' ? String(grams) : '';
+  byId('productGramsEditNote').classList.toggle('hidden', !product);
+  byId('productTrackStock').checked = product?.trackStock === true; byId('productMinStock').value = Number.isInteger(product?.minStock) ? String(product.minStock) : '';
+  byId('productInitialStock').value = ''; byId('productInitialStockField').classList.toggle('hidden', !byId('productTrackStock').checked || Boolean(product?.stockStartDate));
+  byId('productInitialStock').required = byId('productTrackStock').checked && !product?.stockStartDate;
+  byId('productStockSettings').classList.toggle('hidden', !byId('productTrackStock').checked); updateGramsFields();
+  byId('productDialog').showModal(); setTimeout(() => byId('productName').focus(), 40);
+}
 
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => setTab(button.dataset.tab)));
 document.querySelectorAll('[data-goto]').forEach((button) => button.addEventListener('click', () => setTab(button.dataset.goto)));
 document.querySelectorAll('.catalog-add-button').forEach((button) => button.addEventListener('click', () => openProductDialog()));
 document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => button.closest('dialog')?.close()));
+document.querySelectorAll('input[name="productGramsChoice"]').forEach((radio) => radio.addEventListener('change', updateGramsFields));
+byId('productGramsCustom').addEventListener('input', updateGramsFields);
 byId('productTrackStock').addEventListener('change', () => {
   const enabled = byId('productTrackStock').checked; const product = db.products.find((item) => item.id === byId('productId').value);
   byId('productStockSettings').classList.toggle('hidden', !enabled);
@@ -461,16 +484,18 @@ byId('productTrackStock').addEventListener('change', () => {
 });
 byId('productForm').addEventListener('submit', (event) => {
   event.preventDefault(); const name = byId('productName').value.trim(); const price = Number(byId('productPrice').value); const costText = byId('productCost').value.trim(); const cost = costText === '' ? undefined : Number(costText); const id = byId('productId').value;
+  const gramsChoice = document.querySelector('input[name="productGramsChoice"]:checked'); const gramsValue = gramsChoice?.value === 'other' ? byId('productGramsCustom').value.trim() : gramsChoice?.value; const packageGrams = Number(gramsValue);
   const trackStock = byId('productTrackStock').checked; const existing = db.products.find((item) => item.id === id);
   const initialText = byId('productInitialStock').value.trim(); const initialStock = initialText === '' ? NaN : Number(initialText);
   const minText = byId('productMinStock').value.trim(); const minStock = minText === '' ? undefined : Number(minText);
   if (!name) { byId('productFormError').textContent = 'Escribe el nombre del producto.'; return; }
   if (!Number.isInteger(price) || price <= 0) { byId('productFormError').textContent = 'El precio debe ser un número entero mayor que cero.'; return; }
   if (costText !== '' && (!Number.isInteger(cost) || cost < 0)) { byId('productFormError').textContent = 'El costo debe ser un entero mayor o igual a cero, o quedar vacío.'; return; }
+  if (!Number.isInteger(packageGrams) || packageGrams < 1 || packageGrams > 5000) { byId('productFormError').textContent = 'Los gramos por paquete deben ser un entero entre 1 y 5000.'; return; }
   if (trackStock && !existing?.stockStartDate && (!Number.isInteger(initialStock) || initialStock < 0)) { byId('productFormError').textContent = 'Ingresa los paquetes que tienes hoy como entero mayor o igual a cero.'; return; }
   if (trackStock && minText !== '' && (!Number.isInteger(minStock) || minStock < 0)) { byId('productFormError').textContent = 'El umbral debe ser un entero mayor o igual a cero, o quedar vacío.'; return; }
   const stockOptions = { trackStock, minStock, initialStock };
-  try { const saved = id ? Products.edit(id, name, price, cost, stockOptions) : Products.add(name, price, cost, stockOptions); if (saved) { byId('productDialog').close(); renderCatalog(); Sales.loadDraft(byId('saleDate').value); Stock.renderAlerts(); showToast(id ? 'Producto actualizado' : 'Producto agregado'); } }
+  try { const saved = id ? Products.edit(id, name, price, cost, packageGrams, stockOptions) : Products.add(name, price, cost, packageGrams, stockOptions); if (saved) { byId('productDialog').close(); renderCatalog(); Sales.loadDraft(byId('saleDate').value); Stock.renderAlerts(); showToast(id ? 'Producto actualizado' : 'Producto agregado'); } }
   catch (error) { byId('productFormError').textContent = error.message; }
 });
 byId('saleDate').value = todayISO(); byId('reportMonth').value = monthISO(); byId('saleDate').addEventListener('change', () => { Sales.loadDraft(byId('saleDate').value); byId('saleDateHint').textContent = 'Registra cada venta por separado; la jornada antigua se conserva como registro histórico.'; });
@@ -498,7 +523,7 @@ byId('importFile').addEventListener('change', async (event) => {
   try {
     const imported = JSON.parse(await file.text());
     if (imported?.schemaVersion !== 1 || !Array.isArray(imported.products) || !Array.isArray(imported.dailySales)) throw new Error('El archivo no tiene una estructura válida.');
-    const validProducts = imported.products.every((p) => p && typeof p.id === 'string' && typeof p.name === 'string' && Number.isInteger(p.price) && p.price > 0 && Number.isInteger(p.packageGrams) && typeof p.active === 'boolean' && typeof p.createdAt === 'string');
+    const validProducts = imported.products.every((p) => p && typeof p.id === 'string' && typeof p.name === 'string' && Number.isInteger(p.price) && p.price > 0 && Number.isInteger(p.packageGrams) && p.packageGrams >= 1 && typeof p.active === 'boolean' && typeof p.createdAt === 'string');
     const validProductCosts = imported.products.every((p) => (p.cost === undefined || (Number.isInteger(p.cost) && p.cost >= 0)) && (p.trackStock === undefined || typeof p.trackStock === 'boolean') && (p.minStock === undefined || (Number.isInteger(p.minStock) && p.minStock >= 0)) && (p.stockStartDate === undefined || validDate(p.stockStartDate)));
     const validItem = (i) => typeof i.productId === 'string' && typeof i.productName === 'string' && Number.isInteger(i.unitPrice) && Number.isInteger(i.quantity) && i.quantity > 0 && Number.isInteger(i.subtotal) && (i.unitCost === undefined || (Number.isInteger(i.unitCost) && i.unitCost >= 0));
     const validSales = imported.dailySales.every((s) => s && typeof s.id === 'string' && validDate(s.date) && Array.isArray(s.items) && Number.isInteger(s.totalAmount) && Number.isInteger(s.totalPackages) && typeof s.updatedAt === 'string' && s.items.every(validItem) && s.totalPackages === s.items.reduce((sum, item) => sum + item.quantity, 0) && s.totalAmount === s.items.reduce((sum, item) => sum + item.subtotal, 0));

@@ -114,14 +114,28 @@
       <label class="field"><span>Nombre del producto</span><input id="productName" type="text" maxlength="60" placeholder="Ej. Almendras naturales" autocomplete="off" required></label>
       <label class="field"><span>Precio por paquete</span><div class="price-input"><span>$</span><input id="productPrice" type="number" min="1" step="1" inputmode="numeric" placeholder="3500" required></div></label>
       <label class="field"><span>Costo por paquete (opcional)</span><div class="price-input"><span>$</span><input id="productCost" type="number" min="0" step="1" inputmode="numeric" placeholder="1200"></div></label>
-      <p class="cost-note">Lo que te cuesta cada paquete de 80 g</p>
+      <p id="productCostNote" class="cost-note">Lo que te cuesta cada paquete, según los gramos elegidos</p>
+      <fieldset class="grams-field"><legend>Gramos por paquete</legend>
+        <div class="grams-options" role="radiogroup" aria-label="Gramos por paquete">
+          <label class="grams-chip"><input type="radio" name="productGramsChoice" value="50"><span>50 g</span></label>
+          <label class="grams-chip"><input type="radio" name="productGramsChoice" value="80"><span>80 g</span></label>
+          <label class="grams-chip"><input type="radio" name="productGramsChoice" value="100"><span>100 g</span></label>
+          <label class="grams-chip"><input type="radio" name="productGramsChoice" value="150"><span>150 g</span></label>
+          <label class="grams-chip"><input type="radio" name="productGramsChoice" value="200"><span>200 g</span></label>
+          <label class="grams-chip"><input type="radio" name="productGramsChoice" value="250"><span>250 g</span></label>
+          <label class="grams-chip"><input type="radio" name="productGramsChoice" value="500"><span>500 g</span></label>
+          <label class="grams-chip"><input type="radio" name="productGramsChoice" value="other"><span>Otro</span></label>
+        </div>
+      </fieldset>
+      <label id="productGramsCustomWrap" class="field grams-custom hidden"><span>Gramos personalizados</span><div class="grams-custom-input"><input id="productGramsCustom" type="number" min="1" max="5000" step="1" inputmode="numeric"><span>g</span></div></label>
+      <p id="productGramsEditNote" class="grams-edit-note hidden">Cambiar los gramos solo cambia cómo se muestra el producto. Tus ventas pasadas no se modifican. Si vendes este producto en otro tamaño, crea un producto aparte (ej. «Almendras 100 g»).</p>
       <label class="stock-checkbox"><input id="productTrackStock" type="checkbox"><span>Controlar stock de este producto</span></label>
       <div id="productStockSettings" class="product-stock-settings hidden">
         <label id="productInitialStockField" class="field"><span>Paquetes que tienes hoy</span><input id="productInitialStock" type="number" min="0" step="1" inputmode="numeric"></label>
         <label class="field"><span>Avisarme cuando queden (o menos)</span><input id="productMinStock" type="number" min="0" step="1" inputmode="numeric"></label>
         <p class="stock-help">Déjalo vacío si no quieres alerta de stock bajo</p>
       </div>
-      <p class="package-note"><span aria-hidden="true">✳</span> Paquete estándar de 80 g</p>
+      <p class="package-note"><span aria-hidden="true">✳</span> Gramos definidos por paquete</p>
       <p id="productFormError" class="form-error" role="alert"></p>
       <div class="dialog-actions"><button class="button button-light" type="button" data-close-dialog>Cancelar</button><button class="button button-primary" type="submit">Guardar producto</button></div>
     </form>
