@@ -133,7 +133,7 @@ const Reports = {
 function formatDate(iso) { return new Intl.DateTimeFormat('es-CL', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${iso}T12:00:00Z`)); }
 function showToast(message) { const toast = byId('toast'); toast.textContent = message; toast.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('visible'), 2600); }
 function renderCatalog() {
-  const list = byId('catalogList'); list.replaceChildren(); const active = Products.active(); byId('productCount').textContent = `${active.length} ${active.length === 1 ? 'activo' : 'activos'}`; byId('catalogEmpty').classList.toggle('hidden', active.length > 0);
+  const list = byId('catalogList'); list.replaceChildren(); const active = Products.active(); byId('catalogPanel').classList.toggle('has-products', active.length > 0); byId('productCount').textContent = `${active.length} ${active.length === 1 ? 'activo' : 'activos'}`; byId('catalogEmpty').classList.toggle('hidden', active.length > 0);
   for (const product of active) {
     const card = document.createElement('article'); card.className = 'product-card'; const icon = document.createElement('span'); icon.className = 'product-icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = '🥜';
     const info = document.createElement('div'); info.className = 'product-info'; const name = document.createElement('h3'); name.textContent = product.name; const grams = document.createElement('p'); grams.textContent = `Paquete ${product.packageGrams} g`; info.append(name, grams);
@@ -153,7 +153,7 @@ function openProductDialog(product = null) { byId('productForm').reset(); byId('
 
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => setTab(button.dataset.tab)));
 document.querySelectorAll('[data-goto]').forEach((button) => button.addEventListener('click', () => setTab(button.dataset.goto)));
-byId('newProductButton').addEventListener('click', () => openProductDialog());
+document.querySelectorAll('.catalog-add-button').forEach((button) => button.addEventListener('click', () => openProductDialog()));
 document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => byId('productDialog').close()));
 byId('productForm').addEventListener('submit', (event) => {
   event.preventDefault(); const name = byId('productName').value.trim(); const price = Number(byId('productPrice').value); const id = byId('productId').value;
@@ -185,3 +185,5 @@ byId('importFile').addEventListener('change', async (event) => {
 
 renderCatalog(); Sales.loadDraft(byId('saleDate').value); byId('saleDateHint').textContent = 'Nueva jornada para esta fecha.';
 if ('serviceWorker' in navigator && location.protocol !== 'file:') window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('No se pudo registrar el modo sin conexión.', error)));
+
+
