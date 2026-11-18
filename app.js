@@ -1,6 +1,6 @@
 /* Control offline de catálogo, jornadas y reportes. */
 const STORAGE_KEY = 'frutosecos_db';
-const EMPTY_DB = () => ({ schemaVersion: 1, products: [], dailySales: [], saleEntries: [], expenses: [] });
+const EMPTY_DB = () => ({ schemaVersion: 1, products: [], dailySales: [], saleEntries: [], expenses: [], stockMovements: [] });
 const CLP = new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
 const byId = (id) => document.getElementById(id);
 const todayISO = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`; };
@@ -18,8 +18,10 @@ const Storage = {
       if (parsed?.schemaVersion !== 1 || !Array.isArray(parsed.products) || !Array.isArray(parsed.dailySales)) throw new Error('La base guardada no tiene la estructura requerida.');
       if (parsed.saleEntries === undefined) parsed.saleEntries = [];
       if (parsed.expenses === undefined) parsed.expenses = [];
+      if (parsed.stockMovements === undefined) parsed.stockMovements = [];
       if (!Array.isArray(parsed.saleEntries)) throw new Error('La lista de ventas individuales no es válida.');
       if (!Array.isArray(parsed.expenses)) throw new Error('La lista de gastos no es válida.');
+      if (!Array.isArray(parsed.stockMovements)) throw new Error('La lista de movimientos de stock no es válida.');
       return parsed;
     } catch (error) { console.error('No se pudo leer el almacenamiento local.', error); return EMPTY_DB(); }
   },
@@ -36,23 +38,104 @@ let pendingQuantities = new Map();
 let editingSale = null;
 let editingItemSnapshots = new Map();
 let editingKind = null;
+let stockProductId = null;
+
+const Stock = {
+  current(product) {
+    if (!product?.stockStartDate) return null;
+    const received = db.stockMovements.filter((movement) => movement.productId === product.id).reduce((sum, movement) => sum + movement.quantity, 0);
+    const sold = [...db.dailySales, ...db.saleEntries].filter((sale) => sale.date >= product.stockStartDate).reduce((sum, sale) => sum + sale.items.filter((item) => item.productId === product.id).reduce((total, item) => total + item.quantity, 0), 0);
+    return received - sold;
+  },
+  status(product) {
+    if (!product?.active || product.trackStock !== true) return null;
+    const stock = this.current(product); if (stock === null) return null;
+    if (stock < 0) return 'negativo'; if (stock === 0) return 'agotado';
+    if (Number.isInteger(product.minStock) && stock <= product.minStock) return 'bajo';
+    return 'ok';
+  },
+  alerts() { return Products.active().filter((product) => ['bajo', 'agotado', 'negativo'].includes(this.status(product))); },
+  renderAlerts() {
+    const products = this.alerts();
+    for (const id of ['stockAlertCatalog', 'stockAlertSales']) {
+      const banner = byId(id); if (!banner) continue;
+      banner.textContent = products.length ? `⚠ Stock bajo: ${products.slice(0, 2).map((product) => { const stock = this.current(product); return `${product.name} (${this.status(product) === 'agotado' ? 'agotado' : stock})`; }).join(', ')}${products.length > 2 ? ` y ${products.length - 2} más` : ''}` : '';
+      banner.classList.toggle('hidden', products.length === 0);
+    }
+  },
+  available(product) {
+    let stock = this.current(product);
+    if (stock === null) return null;
+    if (editingSale && editingSale.date >= product.stockStartDate) stock += editingSale.items.filter((item) => item.productId === product.id).reduce((sum, item) => sum + item.quantity, 0);
+    return stock;
+  },
+  renderMovementList(product) {
+    const list = byId('stockMovementList'); list.replaceChildren();
+    const labels = { inicial: 'Stock inicial', entrada: 'Entrada', ajuste: 'Ajuste' };
+    const movements = db.stockMovements.filter((item) => item.productId === product.id).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)).slice(0, 15);
+    byId('stockMovementEmpty').classList.toggle('hidden', movements.length > 0);
+    for (const movement of movements) {
+      const row = document.createElement('article'); row.className = 'stock-movement-row';
+      const details = document.createElement('div'); details.className = 'stock-movement-details';
+      const date = document.createElement('time'); date.dateTime = movement.date; date.textContent = formatDate(movement.date);
+      const type = document.createElement('strong'); type.textContent = labels[movement.type] || 'Ajuste';
+      const quantity = document.createElement('b'); quantity.textContent = `${movement.quantity > 0 ? '+' : '−'}${Math.abs(movement.quantity)}`;
+      const note = document.createElement('span'); note.textContent = movement.note || '';
+      details.append(date, type, quantity, note);
+      if (movement.type !== 'inicial') { const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'small-action delete'; remove.textContent = 'Eliminar'; remove.addEventListener('click', () => { if (!confirm('¿Eliminar este movimiento de stock?')) return; db.stockMovements = db.stockMovements.filter((item) => item.id !== movement.id); if (Storage.save(db)) { this.renderCatalogViews(); this.openDialogProduct(); showToast('Movimiento eliminado'); } }); row.append(details, remove); }
+      else row.append(details);
+      list.append(row);
+    }
+  },
+  openDialog(product) {
+    if (!product?.active) return;
+    stockProductId = product.id; this.openDialogProduct(); byId('stockMoveForm').reset(); byId('stockMoveQty').value = '';
+    this.renderMovementList(product); byId('stockDialog').showModal();
+  },
+  openDialogProduct() {
+    const product = db.products.find((item) => item.id === stockProductId && item.active); if (!product) return;
+    byId('stockDialogTitle').textContent = `Stock de ${product.name}`;
+    const count = this.current(product); const badge = byId('stockDialogCount'); badge.textContent = count === null ? 'Sin stock calculable' : `${count} paquetes`; badge.className = `stock-dialog-count stock-badge ${statusClass(this.status(product))}`;
+  },
+  saveMovement() {
+    const product = db.products.find((item) => item.id === stockProductId && item.active); if (!product) return;
+    const kind = byId('stockMoveKind').value; const quantity = Number(byId('stockMoveQty').value); const note = byId('stockMoveNote').value.trim();
+    if (!Number.isInteger(quantity) || quantity < 1 || note.length > 80) { byId('stockMoveError').textContent = 'Ingresa una cantidad entera mayor que cero.'; return; }
+    const type = kind === 'entrada' ? 'entrada' : 'ajuste'; const signed = kind === 'ajuste-menos' ? -quantity : quantity;
+    const movement = { id: makeId(), productId: product.id, date: todayISO(), type, quantity: signed, createdAt: new Date().toISOString() }; if (note) movement.note = note;
+    db.stockMovements.push(movement);
+    if (Storage.save(db)) { byId('stockMoveError').textContent = ''; byId('stockMoveForm').reset(); this.renderCatalogViews(); this.openDialogProduct(); this.renderMovementList(product); showToast('Movimiento de stock guardado'); }
+  },
+  renderCatalogViews() { renderCatalog(); Sales.renderProducts(); Sales.renderTotals(); this.renderAlerts(); }
+};
 
 const Products = {
   active() { return db.products.filter((product) => product.active); },
-  add(name, price, cost) {
+  add(name, price, cost, stockOptions = {}) {
     if (this.active().some((product) => product.name.trim().toLocaleLowerCase('es-CL') === name.trim().toLocaleLowerCase('es-CL'))) throw new Error('Ya existe un producto activo con ese nombre.');
     const product = { id: makeId(), name: name.trim(), price, packageGrams: 80, active: true, createdAt: new Date().toISOString() };
     if (cost !== undefined) product.cost = cost;
+    this.applyStock(product, stockOptions);
     db.products.push(product);
     return Storage.save(db);
   },
-  edit(id, name, price, cost) {
+  edit(id, name, price, cost, stockOptions = {}) {
     if (this.active().some((product) => product.id !== id && product.name.trim().toLocaleLowerCase('es-CL') === name.trim().toLocaleLowerCase('es-CL'))) throw new Error('Ya existe un producto activo con ese nombre.');
     const product = db.products.find((entry) => entry.id === id && entry.active);
     if (!product) throw new Error('No encontramos ese producto activo.');
     product.name = name.trim(); product.price = price;
     if (cost === undefined) delete product.cost; else product.cost = cost;
+    this.applyStock(product, stockOptions);
     return Storage.save(db);
+  },
+  applyStock(product, options) {
+    if (!options.trackStock) { delete product.trackStock; return; }
+    product.trackStock = true;
+    if (options.minStock === undefined) delete product.minStock; else product.minStock = options.minStock;
+    if (!product.stockStartDate) {
+      const date = todayISO(); product.stockStartDate = date;
+      db.stockMovements.push({ id: makeId(), productId: product.id, date, type: 'inicial', quantity: options.initialStock, createdAt: new Date().toISOString() });
+    }
   },
   deactivate(id) {
     const product = db.products.find((entry) => entry.id === id && entry.active);
@@ -139,7 +222,7 @@ const Sales = {
     const amount = document.createElement('b'); amount.textContent = CLP.format(sale.totalAmount); details.append(when, summary, amount);
     const actions = document.createElement('div'); actions.className = 'sale-entry-actions';
     const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'small-action'; edit.textContent = 'Editar'; edit.addEventListener('click', () => this.beginEdit(sale, daily ? 'daily' : 'entry'));
-    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'small-action delete'; remove.textContent = 'Eliminar'; remove.addEventListener('click', () => { if (!confirm(`¿Eliminar esta ${daily ? 'jornada' : 'venta'} del ${formatDate(sale.date)}? Esta acción no se puede deshacer.`)) return; if (daily ? this.remove(sale.date) : this.removeEntry(sale.id)) showToast('Registro eliminado'); });
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'small-action delete'; remove.textContent = 'Eliminar'; remove.addEventListener('click', () => { if (!confirm(`¿Eliminar esta ${daily ? 'jornada' : 'venta'} del ${formatDate(sale.date)}? Esta acción no se puede deshacer.`)) return; if (daily ? this.remove(sale.date) : this.removeEntry(sale.id)) { renderCatalog(); Stock.renderAlerts(); Sales.renderProducts(); showToast('Registro eliminado'); } });
     actions.append(edit, remove); row.append(details, actions); return row;
   },
   renderProducts() {
@@ -154,14 +237,21 @@ const Sales = {
       const price = document.createElement('span'); price.className = 'product-price'; price.textContent = `${CLP.format(shownPrice)} · 80 g${product.active ? '' : ' · dado de baja'}`;
       const subtotal = document.createElement('p'); subtotal.className = 'muted item-subtotal'; subtotal.textContent = `Subtotal: ${CLP.format(shownPrice * (pendingQuantities.get(product.id) || 0))}`;
       info.append(name, price, subtotal);
+      let stockWarning = null; let stockAvailable = null;
+      if (product.trackStock === true) {
+        const stock = Stock.current(product); const status = Stock.status(product); const badge = document.createElement('span'); badge.className = `stock-badge ${statusClass(status)}`; badge.textContent = stock === null ? 'Stock sin iniciar' : `Quedan ${stock} paquetes`; info.append(badge);
+        stockWarning = document.createElement('p'); stockWarning.className = 'stock-warning hidden'; info.append(stockWarning);
+        stockAvailable = Stock.available(product); const pending = pendingQuantities.get(product.id) || 0;
+        if (stockAvailable !== null && pending > stockAvailable) { stockWarning.textContent = `Supera el stock disponible (${stockAvailable})`; stockWarning.classList.remove('hidden'); }
+      }
       const controls = document.createElement('div'); controls.className = 'quantity-control';
       const minus = document.createElement('button'); minus.className = 'quantity-button'; minus.type = 'button'; minus.textContent = '−'; minus.setAttribute('aria-label', `Restar ${product.name}`);
       const input = document.createElement('input'); input.className = 'quantity-input'; input.type = 'number'; input.min = '0'; input.step = '1'; input.inputMode = 'numeric'; input.value = String(pendingQuantities.get(product.id) || 0); input.setAttribute('aria-label', `Cantidad de ${product.name}`);
       const plus = document.createElement('button'); plus.className = 'quantity-button'; plus.type = 'button'; plus.textContent = '+'; plus.setAttribute('aria-label', `Sumar ${product.name}`);
       if (!product.active && editingSale) { minus.disabled = true; plus.disabled = true; input.disabled = true; }
-      const update = (value) => { const quantity = Number.isInteger(value) && value >= 0 ? value : 0; pendingQuantities.set(product.id, quantity); input.value = String(quantity); subtotal.textContent = `Subtotal: ${CLP.format(shownPrice * quantity)}`; this.renderTotals(); };
+      const update = (value) => { const quantity = Number.isInteger(value) && value >= 0 ? value : 0; pendingQuantities.set(product.id, quantity); input.value = String(quantity); subtotal.textContent = `Subtotal: ${CLP.format(shownPrice * quantity)}`; if (stockWarning) { const exceeds = stockAvailable !== null && quantity > stockAvailable; stockWarning.textContent = exceeds ? `Supera el stock disponible (${stockAvailable})` : ''; stockWarning.classList.toggle('hidden', !exceeds); } this.renderTotals(); };
       minus.addEventListener('click', () => update((pendingQuantities.get(product.id) || 0) - 1)); plus.addEventListener('click', () => update((pendingQuantities.get(product.id) || 0) + 1));
-      input.addEventListener('input', () => { if (input.value === '') { pendingQuantities.set(product.id, 0); subtotal.textContent = `Subtotal: ${CLP.format(0)}`; this.renderTotals(); return; } const value = Number(input.value); if (Number.isInteger(value) && value >= 0) update(value); });
+      input.addEventListener('input', () => { if (input.value === '') { pendingQuantities.set(product.id, 0); subtotal.textContent = `Subtotal: ${CLP.format(0)}`; if (stockWarning) { stockWarning.textContent = ''; stockWarning.classList.add('hidden'); } this.renderTotals(); return; } const value = Number(input.value); if (Number.isInteger(value) && value >= 0) update(value); });
       input.addEventListener('blur', () => { if (!input.value || !Number.isInteger(Number(input.value)) || Number(input.value) < 0) update(0); });
       controls.append(minus, input, plus); card.append(info, controls); list.append(card);
     }
@@ -336,15 +426,17 @@ const Reports = {
 };
 
 function formatDate(iso) { return new Intl.DateTimeFormat('es-CL', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${iso}T12:00:00Z`)); }
+function statusClass(status) { return status === 'ok' ? 'ok' : status === 'bajo' ? 'low' : status === 'agotado' || status === 'negativo' ? 'out' : ''; }
 function showToast(message) { const toast = byId('toast'); toast.textContent = message; toast.classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('visible'), 2600); }
 function renderCatalog() {
   const list = byId('catalogList'); list.replaceChildren(); const active = Products.active(); byId('catalogPanel').classList.toggle('has-products', active.length > 0); byId('productCount').textContent = `${active.length} ${active.length === 1 ? 'activo' : 'activos'}`; byId('catalogEmpty').classList.toggle('hidden', active.length > 0);
   for (const product of active) {
     const card = document.createElement('article'); card.className = 'product-card'; const icon = document.createElement('span'); icon.className = 'product-icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = '🥜';
     const info = document.createElement('div'); info.className = 'product-info'; const name = document.createElement('h3'); name.textContent = product.name; const grams = document.createElement('p'); grams.textContent = `Paquete ${product.packageGrams} g`; const cost = document.createElement('p'); cost.textContent = Number.isInteger(product.cost) && product.cost >= 0 ? `Costo ${CLP.format(product.cost)}` : 'Sin costo definido'; info.append(name, grams, cost);
+    if (product.trackStock === true) { const stock = Stock.current(product); const status = Stock.status(product); const badge = document.createElement('span'); badge.className = `stock-badge ${statusClass(status)}`; badge.textContent = stock === null ? 'Stock sin iniciar' : `Stock: ${stock} paquetes`; info.append(badge); if (status === 'negativo') { const hint = document.createElement('p'); hint.className = 'stock-negative-note'; hint.textContent = 'Revisa tus entradas'; info.append(hint); } }
     const price = document.createElement('strong'); price.className = 'product-price'; price.textContent = CLP.format(product.price);
-    const actions = document.createElement('div'); actions.className = 'product-actions'; const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'small-action'; edit.textContent = 'Editar'; edit.addEventListener('click', () => openProductDialog(product)); const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'small-action delete'; remove.textContent = 'Eliminar'; remove.addEventListener('click', () => { if (confirm(`¿Eliminar “${product.name}” del catálogo? El historial de ventas se conservará.`) && Products.deactivate(product.id)) { renderCatalog(); Sales.loadDraft(byId('saleDate').value); showToast('Producto eliminado del catálogo'); } });
-    actions.append(edit, remove); card.append(icon, info, price, actions); list.append(card);
+    const actions = document.createElement('div'); actions.className = 'product-actions'; const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'small-action'; edit.textContent = 'Editar'; edit.addEventListener('click', () => openProductDialog(product)); const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'small-action delete'; remove.textContent = 'Eliminar'; remove.addEventListener('click', () => { if (confirm(`¿Eliminar “${product.name}” del catálogo? El historial de ventas se conservará.`) && Products.deactivate(product.id)) { renderCatalog(); Sales.loadDraft(byId('saleDate').value); Stock.renderAlerts(); showToast('Producto eliminado del catálogo'); } });
+    actions.append(edit, remove); if (product.trackStock === true) { const stockButton = document.createElement('button'); stockButton.type = 'button'; stockButton.className = 'small-action'; stockButton.textContent = 'Stock'; stockButton.addEventListener('click', () => Stock.openDialog(product)); actions.append(stockButton); } card.append(icon, info, price, actions); list.append(card);
   }
 }
 function setTab(tab) {
@@ -352,24 +444,46 @@ function setTab(tab) {
   Object.entries(panels).forEach(([key, id]) => byId(id).classList.toggle('hidden', key !== tab));
   document.querySelectorAll('.nav-item').forEach((button) => { const selected = button.dataset.tab === tab; button.classList.toggle('active', selected); if (selected) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); });
   if (tab === 'sales') Sales.loadDraft(byId('saleDate').value); if (tab === 'expenses') Expenses.render(); if (tab === 'summary') Reports.render(byId('reportMonth').value);
+  Stock.renderAlerts();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
-function openProductDialog(product = null) { byId('productForm').reset(); byId('productFormError').textContent = ''; byId('productId').value = product?.id || ''; byId('dialogTitle').textContent = product ? 'Editar producto' : 'Nuevo producto'; byId('productName').value = product?.name || ''; byId('productPrice').value = product?.price || ''; byId('productCost').value = product && Number.isInteger(product.cost) ? String(product.cost) : ''; byId('productDialog').showModal(); setTimeout(() => byId('productName').focus(), 40); }
+function openProductDialog(product = null) { byId('productForm').reset(); byId('productFormError').textContent = ''; byId('productId').value = product?.id || ''; byId('dialogTitle').textContent = product ? 'Editar producto' : 'Nuevo producto'; byId('productName').value = product?.name || ''; byId('productPrice').value = product?.price || ''; byId('productCost').value = product && Number.isInteger(product.cost) ? String(product.cost) : ''; byId('productTrackStock').checked = product?.trackStock === true; byId('productMinStock').value = Number.isInteger(product?.minStock) ? String(product.minStock) : ''; byId('productInitialStock').value = ''; byId('productInitialStockField').classList.toggle('hidden', !byId('productTrackStock').checked || Boolean(product?.stockStartDate)); byId('productInitialStock').required = byId('productTrackStock').checked && !product?.stockStartDate; byId('productStockSettings').classList.toggle('hidden', !byId('productTrackStock').checked); byId('productDialog').showModal(); setTimeout(() => byId('productName').focus(), 40); }
 
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => setTab(button.dataset.tab)));
 document.querySelectorAll('[data-goto]').forEach((button) => button.addEventListener('click', () => setTab(button.dataset.goto)));
 document.querySelectorAll('.catalog-add-button').forEach((button) => button.addEventListener('click', () => openProductDialog()));
-document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => byId('productDialog').close()));
+document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => button.closest('dialog')?.close()));
+byId('productTrackStock').addEventListener('change', () => {
+  const enabled = byId('productTrackStock').checked; const product = db.products.find((item) => item.id === byId('productId').value);
+  byId('productStockSettings').classList.toggle('hidden', !enabled);
+  byId('productInitialStockField').classList.toggle('hidden', !enabled || Boolean(product?.stockStartDate));
+  byId('productInitialStock').required = enabled && !product?.stockStartDate;
+});
 byId('productForm').addEventListener('submit', (event) => {
   event.preventDefault(); const name = byId('productName').value.trim(); const price = Number(byId('productPrice').value); const costText = byId('productCost').value.trim(); const cost = costText === '' ? undefined : Number(costText); const id = byId('productId').value;
+  const trackStock = byId('productTrackStock').checked; const existing = db.products.find((item) => item.id === id);
+  const initialText = byId('productInitialStock').value.trim(); const initialStock = initialText === '' ? NaN : Number(initialText);
+  const minText = byId('productMinStock').value.trim(); const minStock = minText === '' ? undefined : Number(minText);
   if (!name) { byId('productFormError').textContent = 'Escribe el nombre del producto.'; return; }
   if (!Number.isInteger(price) || price <= 0) { byId('productFormError').textContent = 'El precio debe ser un número entero mayor que cero.'; return; }
   if (costText !== '' && (!Number.isInteger(cost) || cost < 0)) { byId('productFormError').textContent = 'El costo debe ser un entero mayor o igual a cero, o quedar vacío.'; return; }
-  try { const saved = id ? Products.edit(id, name, price, cost) : Products.add(name, price, cost); if (saved) { byId('productDialog').close(); renderCatalog(); Sales.loadDraft(byId('saleDate').value); showToast(id ? 'Producto actualizado' : 'Producto agregado'); } }
+  if (trackStock && !existing?.stockStartDate && (!Number.isInteger(initialStock) || initialStock < 0)) { byId('productFormError').textContent = 'Ingresa los paquetes que tienes hoy como entero mayor o igual a cero.'; return; }
+  if (trackStock && minText !== '' && (!Number.isInteger(minStock) || minStock < 0)) { byId('productFormError').textContent = 'El umbral debe ser un entero mayor o igual a cero, o quedar vacío.'; return; }
+  const stockOptions = { trackStock, minStock, initialStock };
+  try { const saved = id ? Products.edit(id, name, price, cost, stockOptions) : Products.add(name, price, cost, stockOptions); if (saved) { byId('productDialog').close(); renderCatalog(); Sales.loadDraft(byId('saleDate').value); Stock.renderAlerts(); showToast(id ? 'Producto actualizado' : 'Producto agregado'); } }
   catch (error) { byId('productFormError').textContent = error.message; }
 });
 byId('saleDate').value = todayISO(); byId('reportMonth').value = monthISO(); byId('saleDate').addEventListener('change', () => { Sales.loadDraft(byId('saleDate').value); byId('saleDateHint').textContent = 'Registra cada venta por separado; la jornada antigua se conserva como registro histórico.'; });
-byId('saveSaleButton').addEventListener('click', () => { const date = byId('saleDate').value; const wasEditing = Boolean(editingSale); const result = Sales.saveEntry(date); if (result) { byId('saleDateHint').textContent = wasEditing ? 'Cambios guardados.' : 'Venta registrada. Puedes ingresar la siguiente.'; Reports.render(byId('reportMonth').value); showToast(wasEditing ? 'Cambios guardados' : 'Venta registrada'); } });
+byId('saveSaleButton').addEventListener('click', () => {
+  const date = byId('saleDate').value; const wasEditing = Boolean(editingSale); const soldProducts = Sales.currentItems().map((item) => item.productId); const result = Sales.saveEntry(date);
+  if (result) {
+    byId('saleDateHint').textContent = wasEditing ? 'Cambios guardados.' : 'Venta registrada. Puedes ingresar la siguiente.'; Reports.render(byId('reportMonth').value); renderCatalog(); Stock.renderAlerts();
+    const low = [...new Set(soldProducts)].map((id) => db.products.find((product) => product.id === id)).filter((product) => product && ['bajo', 'agotado', 'negativo'].includes(Stock.status(product)));
+    const alertText = low.length ? ` · Stock bajo: ${low[0].name} (${Stock.current(low[0])})${low.length > 1 ? ` y ${low.length - 1} más` : ''}` : '';
+    showToast(`${wasEditing ? 'Cambios guardados' : 'Venta registrada'}${alertText}`);
+  }
+});
+byId('stockMoveForm').addEventListener('submit', (event) => { event.preventDefault(); Stock.saveMovement(); });
 byId('cancelEditButton').addEventListener('click', () => Sales.cancelEdit());
 byId('reportMonth').value = monthISO(); byId('expenseMonth').value = monthISO(); byId('expenseDate').value = todayISO();
 byId('expenseForm').addEventListener('submit', (event) => { event.preventDefault(); Expenses.save(); });
@@ -385,22 +499,24 @@ byId('importFile').addEventListener('change', async (event) => {
     const imported = JSON.parse(await file.text());
     if (imported?.schemaVersion !== 1 || !Array.isArray(imported.products) || !Array.isArray(imported.dailySales)) throw new Error('El archivo no tiene una estructura válida.');
     const validProducts = imported.products.every((p) => p && typeof p.id === 'string' && typeof p.name === 'string' && Number.isInteger(p.price) && p.price > 0 && Number.isInteger(p.packageGrams) && typeof p.active === 'boolean' && typeof p.createdAt === 'string');
-    const validProductCosts = imported.products.every((p) => p.cost === undefined || (Number.isInteger(p.cost) && p.cost >= 0));
+    const validProductCosts = imported.products.every((p) => (p.cost === undefined || (Number.isInteger(p.cost) && p.cost >= 0)) && (p.trackStock === undefined || typeof p.trackStock === 'boolean') && (p.minStock === undefined || (Number.isInteger(p.minStock) && p.minStock >= 0)) && (p.stockStartDate === undefined || validDate(p.stockStartDate)));
     const validItem = (i) => typeof i.productId === 'string' && typeof i.productName === 'string' && Number.isInteger(i.unitPrice) && Number.isInteger(i.quantity) && i.quantity > 0 && Number.isInteger(i.subtotal) && (i.unitCost === undefined || (Number.isInteger(i.unitCost) && i.unitCost >= 0));
     const validSales = imported.dailySales.every((s) => s && typeof s.id === 'string' && validDate(s.date) && Array.isArray(s.items) && Number.isInteger(s.totalAmount) && Number.isInteger(s.totalPackages) && typeof s.updatedAt === 'string' && s.items.every(validItem) && s.totalPackages === s.items.reduce((sum, item) => sum + item.quantity, 0) && s.totalAmount === s.items.reduce((sum, item) => sum + item.subtotal, 0));
     const incomingEntries = imported.saleEntries === undefined ? [] : imported.saleEntries;
     const validEntries = Array.isArray(incomingEntries) && incomingEntries.every((s) => s && typeof s.id === 'string' && validDate(s.date) && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(s.time) && Array.isArray(s.items) && Number.isInteger(s.totalAmount) && Number.isInteger(s.totalPackages) && typeof s.createdAt === 'string' && typeof s.updatedAt === 'string' && s.items.every(validItem)) && incomingEntries.every((s) => s.totalPackages === s.items.reduce((sum, i) => sum + i.quantity, 0) && s.totalAmount === s.items.reduce((sum, i) => sum + i.subtotal, 0)) && new Set(incomingEntries.map((sale) => sale.id)).size === incomingEntries.length;
     const incomingExpenses = imported.expenses === undefined ? [] : imported.expenses;
     const validExpenses = Array.isArray(incomingExpenses) && incomingExpenses.every((expense) => expense && typeof expense.id === 'string' && validDate(expense.date) && Object.hasOwn(EXPENSE_CATEGORIES, expense.category) && Number.isInteger(expense.amount) && expense.amount > 0 && (expense.description === undefined || (typeof expense.description === 'string' && expense.description.length <= 80)) && typeof expense.createdAt === 'string' && typeof expense.updatedAt === 'string');
-    if (!validProducts || !validProductCosts || !validSales || !validEntries || !validExpenses || new Set(imported.dailySales.map((sale) => sale.date)).size !== imported.dailySales.length) throw new Error('El archivo contiene datos incompletos o fechas duplicadas.');
+    const incomingMovements = imported.stockMovements === undefined ? [] : imported.stockMovements;
+    const validMovements = Array.isArray(incomingMovements) && incomingMovements.every((movement) => movement && typeof movement.id === 'string' && typeof movement.productId === 'string' && validDate(movement.date) && ['inicial', 'entrada', 'ajuste'].includes(movement.type) && Number.isInteger(movement.quantity) && (movement.type === 'inicial' ? movement.quantity >= 0 : movement.type === 'entrada' ? movement.quantity >= 1 : movement.quantity !== 0) && (movement.note === undefined || (typeof movement.note === 'string' && movement.note.length <= 80)) && typeof movement.createdAt === 'string') && new Set(incomingMovements.map((movement) => movement.id)).size === incomingMovements.length;
+    if (!validProducts || !validProductCosts || !validSales || !validEntries || !validExpenses || !validMovements || new Set(imported.dailySales.map((sale) => sale.date)).size !== imported.dailySales.length) throw new Error('El archivo contiene datos incompletos o fechas duplicadas.');
     if (!confirm('Importar este respaldo reemplazará todos los datos guardados en este dispositivo. ¿Continuar?')) return;
-    db = { ...imported, schemaVersion: 1, products: imported.products, dailySales: imported.dailySales, saleEntries: incomingEntries, expenses: incomingExpenses };
+    db = { ...imported, schemaVersion: 1, products: imported.products, dailySales: imported.dailySales, saleEntries: incomingEntries, expenses: incomingExpenses, stockMovements: incomingMovements };
     editingSale = null; editingItemSnapshots = new Map();
-    if (Storage.save(db)) { renderCatalog(); Sales.loadDraft(byId('saleDate').value); Reports.render(byId('reportMonth').value); showToast('Respaldo importado'); }
+    if (Storage.save(db)) { renderCatalog(); Sales.loadDraft(byId('saleDate').value); Reports.render(byId('reportMonth').value); Stock.renderAlerts(); showToast('Respaldo importado'); }
   } catch (error) { alert(`No se pudo importar el respaldo: ${error.message}`); }
 });
 
-renderCatalog(); Sales.loadDraft(byId('saleDate').value); byId('saleDateHint').textContent = 'Nueva jornada para esta fecha.';
+renderCatalog(); Sales.loadDraft(byId('saleDate').value); byId('saleDateHint').textContent = 'Nueva jornada para esta fecha.'; Stock.renderAlerts();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch((error) => console.warn('No se pudo registrar el modo sin conexión.', error)));
 
 

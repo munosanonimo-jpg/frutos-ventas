@@ -28,6 +28,7 @@
   <main id="appMain">
     <section class="tab-panel" id="catalogPanel" aria-labelledby="catalogHeading">
       <div class="section-heading"><div><p class="eyebrow">TUS PRODUCTOS</p><h2 id="catalogHeading">Catálogo</h2></div><span id="productCount" class="count-pill">0 activos</span></div>
+      <p id="stockAlertCatalog" class="stock-alert hidden" role="status"></p>
       <div id="catalogList" class="card-list"></div>
       <div id="catalogEmpty" class="empty-state"><span class="empty-icon" aria-hidden="true">🥜</span><h3>Tu catálogo comienza aquí</h3><p>Agrega tus productos para tenerlos listos al momento de vender.</p><button id="newProductButton" class="catalog-add-button empty-add-button" type="button"><span aria-hidden="true">＋</span> Agregar un producto</button></div>
       <button id="newProductFab" class="catalog-add-button fab" type="button"><span aria-hidden="true">＋</span> Nuevo producto</button>
@@ -35,6 +36,7 @@
 
     <section class="tab-panel hidden" id="salesPanel" aria-labelledby="salesHeading">
       <div class="section-heading"><div><p class="eyebrow">REGISTRO DIARIO</p><h2 id="salesHeading">Vender hoy</h2></div><span class="today-dot" aria-hidden="true"></span></div>
+      <p id="stockAlertSales" class="stock-alert hidden" role="status"></p>
       <label class="field date-field"><span>Fecha de la jornada</span><input id="saleDate" type="date"></label>
       <p id="saleDateHint" class="muted date-hint"></p>
       <label id="saleTimeField" class="field date-field hidden"><span>Hora de la venta</span><input id="saleTime" type="time" value="12:00"></label>
@@ -113,10 +115,31 @@
       <label class="field"><span>Precio por paquete</span><div class="price-input"><span>$</span><input id="productPrice" type="number" min="1" step="1" inputmode="numeric" placeholder="3500" required></div></label>
       <label class="field"><span>Costo por paquete (opcional)</span><div class="price-input"><span>$</span><input id="productCost" type="number" min="0" step="1" inputmode="numeric" placeholder="1200"></div></label>
       <p class="cost-note">Lo que te cuesta cada paquete de 80 g</p>
+      <label class="stock-checkbox"><input id="productTrackStock" type="checkbox"><span>Controlar stock de este producto</span></label>
+      <div id="productStockSettings" class="product-stock-settings hidden">
+        <label id="productInitialStockField" class="field"><span>Paquetes que tienes hoy</span><input id="productInitialStock" type="number" min="0" step="1" inputmode="numeric"></label>
+        <label class="field"><span>Avisarme cuando queden (o menos)</span><input id="productMinStock" type="number" min="0" step="1" inputmode="numeric"></label>
+        <p class="stock-help">Déjalo vacío si no quieres alerta de stock bajo</p>
+      </div>
       <p class="package-note"><span aria-hidden="true">✳</span> Paquete estándar de 80 g</p>
       <p id="productFormError" class="form-error" role="alert"></p>
       <div class="dialog-actions"><button class="button button-light" type="button" data-close-dialog>Cancelar</button><button class="button button-primary" type="submit">Guardar producto</button></div>
     </form>
+  </dialog>
+  <dialog id="stockDialog" class="product-dialog stock-dialog">
+    <div class="stock-dialog-content">
+      <div class="dialog-top"><div><p class="eyebrow">INVENTARIO</p><h2 id="stockDialogTitle">Stock del producto</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Cerrar">×</button></div>
+      <p id="stockDialogCount" class="stock-dialog-count"></p>
+      <form id="stockMoveForm">
+        <label class="field"><span>Tipo de movimiento</span><select id="stockMoveKind"><option value="entrada">Entrada: llegaron paquetes</option><option value="ajuste-mas">Ajuste: sumar</option><option value="ajuste-menos">Ajuste: restar (merma, regalo, error)</option></select></label>
+        <label class="field"><span>Paquetes</span><input id="stockMoveQty" type="number" min="1" step="1" inputmode="numeric" required></label>
+        <label class="field"><span>Nota (opcional)</span><input id="stockMoveNote" type="text" maxlength="80"></label>
+        <p id="stockMoveError" class="form-error" role="alert"></p>
+        <button class="button button-primary" type="submit">Guardar movimiento</button>
+      </form>
+      <section class="stock-history"><h3>Movimientos recientes</h3><div id="stockMovementList" class="stock-movement-list"></div><p id="stockMovementEmpty" class="inline-empty hidden">Aún no hay movimientos.</p></section>
+      <div class="dialog-actions"><button class="button button-light" type="button" data-close-dialog>Cerrar</button></div>
+    </div>
   </dialog>
   <input id="importFile" type="file" accept="application/json,.json" hidden>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
