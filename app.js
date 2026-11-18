@@ -341,7 +341,7 @@ const Reports = {
     const packageLabel = unknownPackages === 1 ? '1 paquete' : `${unknownPackages} paquetes`;
     byId('monthUnknownPackages').textContent = unknownPackages ? `${packageLabel} · Ganancia sin calcular` : '';
     byId('unknownCostCard').classList.toggle('hidden', unknownPackages === 0);
-    byId('unknownCostNote').textContent = unknownPackages > 0 && total > 0 ? `La ganancia cubre el ${Math.round(((total - unknownIncome) / total) * 100)} % de lo vendido este mes. El resto no tiene costo definido y no está incluido.` : '';
+    byId('unknownCostNote').textContent = unknownPackages > 0 && total > 0 ? `El ${Math.round(((total - unknownIncome) / total) * 100)} % de lo vendido este mes tiene costo definido. El resto no está incluido en el cálculo de ganancia.` : '';
     byId('unknownCostNote').classList.toggle('hidden', unknownPackages === 0 || total <= 0);
     const ordered = [...products.values()].sort((a, b) => b.income - a.income);
     byId('productReport').replaceChildren(); byId('productReportEmpty').classList.toggle('hidden', ordered.length > 0);
