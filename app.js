@@ -262,6 +262,76 @@ const Reports = {
     const dayList = byId('dayReport'); dayList.replaceChildren(); const sorted = [...perDay.values()].sort((a, b) => b.date.localeCompare(a.date));
     byId('dayReportEmpty').classList.toggle('hidden', sorted.length > 0);
     for (const sale of sorted) { const row = document.createElement('button'); row.type = 'button'; row.className = 'day-row'; row.dataset.date = sale.date; const date = document.createElement('time'); date.dateTime = sale.date; date.textContent = formatDate(sale.date); const count = document.createElement('span'); count.className = 'day-packages'; count.textContent = `${sale.totalPackages} paquetes`; const amount = document.createElement('strong'); amount.textContent = CLP.format(sale.totalAmount); const arrow = document.createElement('span'); arrow.className = 'day-arrow'; arrow.textContent = '›'; row.append(date, count, amount, arrow); dayList.append(row); }
+    this.renderCharts(month, sales);
+  },
+  monthSales(month) { return [...db.dailySales, ...db.saleEntries].filter((sale) => sale.date.startsWith(month)); },
+  renderCharts(month, sales) {
+    const daysEl = byId('chartDays'); const detailEl = byId('chartDaysDetail'); const daysEmpty = byId('chartDaysEmpty');
+    const [year, monthNumber] = month.split('-').map(Number); const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+    const byDate = new Map();
+    for (const sale of sales) { const day = Number(sale.date.slice(8, 10)); const row = byDate.get(day) || { date: sale.date, totalAmount: 0, totalPackages: 0 }; row.totalAmount += sale.totalAmount; row.totalPackages += sale.totalPackages; byDate.set(day, row); }
+      daysEl.replaceChildren(); daysEl._labels?.remove();
+    if (!byDate.size) { daysEl.classList.add('hidden'); detailEl.classList.add('hidden'); daysEmpty.classList.remove('hidden'); }
+    else {
+      daysEl.classList.remove('hidden'); detailEl.classList.remove('hidden'); daysEmpty.classList.add('hidden');
+      const maxAmount = Math.max(...[...byDate.values()].map((item) => item.totalAmount));
+      const best = [...byDate.values()].sort((a, b) => b.totalAmount - a.totalAmount || a.date.localeCompare(b.date))[0];
+      let selectedBar = null;
+      for (let day = 1; day <= daysInMonth; day++) {
+        const sale = byDate.get(day); const column = document.createElement(sale ? 'button' : 'div');
+        column.className = `chart-day-column${sale ? ' has-sale' : ' no-sale'}`;
+        if (sale) {
+          column.type = 'button'; const date = sale.date;
+          const dateLabel = new Intl.DateTimeFormat('es-CL', { day: 'numeric', month: 'long', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`));
+          column.setAttribute('aria-label', `${dateLabel}: ${CLP.format(sale.totalAmount)}, ${sale.totalPackages} paquetes`);
+          column.addEventListener('click', () => { if (selectedBar) selectedBar.classList.remove('selected'); column.classList.add('selected'); selectedBar = column; detailEl.textContent = `${formatDate(date)} · ${CLP.format(sale.totalAmount)} · ${sale.totalPackages} paquetes`; });
+        }
+        const bar = document.createElement('span'); bar.className = 'chart-day-bar';
+        bar.style.height = sale ? `${Math.max(8, Math.round((sale.totalAmount / maxAmount) * 112))}px` : '2px'; column.append(bar); daysEl.append(column);
+      }
+      const labels = document.createElement('div'); labels.className = 'chart-day-labels';
+      for (let day = 1; day <= daysInMonth; day++) { const label = document.createElement('span'); label.textContent = [1, 5, 10, 15, 20, 25, daysInMonth].includes(day) ? String(day) : ''; labels.append(label); }
+      daysEl.after(labels); daysEl._labels = labels;
+      detailEl.textContent = `Mejor día: ${formatDate(best.date)} · ${CLP.format(best.totalAmount)}`;
+    }
+
+    const productsEl = byId('chartProducts'); const productsEmpty = byId('chartProductsEmpty'); productsEl.replaceChildren();
+    const productMap = new Map();
+    for (const sale of sales) for (const item of sale.items) { const row = productMap.get(item.productId) || { name: item.productName, income: 0, packages: 0 }; row.income += item.subtotal; row.packages += item.quantity; productMap.set(item.productId, row); }
+    const products = [...productMap.values()].sort((a, b) => b.income - a.income); productsEl.classList.toggle('hidden', !products.length); productsEmpty.classList.toggle('hidden', products.length > 0);
+    if (products.length) {
+      const maxIncome = Math.max(products[0].income, 1); const shown = products.slice(0, 6); const rest = products.slice(6);
+      if (rest.length) shown.push({ name: 'Otros', income: rest.reduce((sum, item) => sum + item.income, 0), packages: rest.reduce((sum, item) => sum + item.packages, 0) });
+      for (const item of shown) {
+        const row = document.createElement('div'); row.className = 'chart-product-row';
+        const top = document.createElement('div'); top.className = 'chart-product-top'; const name = document.createElement('span'); name.className = 'chart-product-name'; name.textContent = item.name;
+        const value = document.createElement('span'); value.className = 'chart-product-value'; value.textContent = `${CLP.format(item.income)} · ${item.packages} paq.`; top.append(name, value);
+        const track = document.createElement('div'); track.className = 'chart-product-track'; const bar = document.createElement('span'); bar.className = 'chart-product-bar'; bar.style.width = `${Math.max(3, (item.income / maxIncome) * 100)}%`; track.append(bar); row.append(top, track); productsEl.append(row);
+      }
+    }
+
+    const compareEl = byId('chartCompare'); compareEl.replaceChildren();
+    const previousDate = new Date(Date.UTC(year, monthNumber - 2, 15));
+    const previousMonth = `${previousDate.getUTCFullYear()}-${String(previousDate.getUTCMonth() + 1).padStart(2, '0')}`;
+    const previousSales = this.monthSales(previousMonth);
+    const labelMonth = (value) => { const [y, m] = value.split('-').map(Number); return new Intl.DateTimeFormat('es-CL', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(y, m - 1, 15))); };
+    const currentMetrics = { 'Ingresos': sales.reduce((sum, sale) => sum + sale.totalAmount, 0), 'Paquetes': sales.reduce((sum, sale) => sum + sale.totalPackages, 0), 'Días con ventas': new Set(sales.map((sale) => sale.date)).size };
+    const previousMetrics = { 'Ingresos': previousSales.reduce((sum, sale) => sum + sale.totalAmount, 0), 'Paquetes': previousSales.reduce((sum, sale) => sum + sale.totalPackages, 0), 'Días con ventas': new Set(previousSales.map((sale) => sale.date)).size };
+    for (const metric of Object.keys(currentMetrics)) {
+      const current = currentMetrics[metric]; const previous = previousMetrics[metric]; const maxValue = Math.max(current, previous, 1);
+      const card = document.createElement('article'); card.className = 'chart-compare-card'; const title = document.createElement('h4'); title.textContent = metric;
+      const values = document.createElement('div'); values.className = 'chart-compare-values'; const nowValue = document.createElement('strong'); nowValue.textContent = metric === 'Ingresos' ? CLP.format(current) : String(current); const beforeValue = document.createElement('span'); beforeValue.textContent = metric === 'Ingresos' ? CLP.format(previous) : String(previous); values.append(nowValue, beforeValue);
+      const bars = document.createElement('div'); bars.className = 'chart-compare-bars';
+      for (const [value, className, label] of [[current, 'current', labelMonth(month)], [previous, 'previous', labelMonth(previousMonth)]]) { const item = document.createElement('div'); item.className = `chart-compare-bar-row ${className}`; const caption = document.createElement('span'); caption.textContent = label; const track = document.createElement('div'); track.className = 'chart-compare-track'; const bar = document.createElement('i'); bar.style.width = `${value ? Math.max(3, value / maxValue * 100) : 0}%`; track.append(bar); item.append(caption, track); bars.append(item); }
+      const change = document.createElement('p'); change.className = 'chart-compare-change';
+      if (previous === 0 && current === 0) { change.textContent = '—'; change.classList.add('neutral'); }
+      else if (previous === 0) { change.textContent = 'Mes anterior sin ventas'; change.classList.add('neutral'); }
+      else if (current === previous) { change.textContent = '= igual'; change.classList.add('neutral'); }
+      else if (current > previous) { change.textContent = `▲ ${Math.round((current - previous) / previous * 100)} %`; change.classList.add('up'); }
+      else { change.textContent = `▼ ${Math.round((previous - current) / previous * 100)} %`; change.classList.add('down'); }
+      card.append(title, values, bars, change); compareEl.append(card);
+    }
+    byId('chartCompareNote').textContent = previousSales.length ? '' : 'El mes anterior no tiene ventas registradas.';
   }
 };
 
