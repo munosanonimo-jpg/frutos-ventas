@@ -1,8 +1,7 @@
 /* Control offline de catálogo, jornadas y reportes. */
 const STORAGE_KEY = 'frutosecos_db';
-const EMPTY_DB = () => ({ schemaVersion: 1, products: [], dailySales: [] });
+const EMPTY_DB = () => ({ schemaVersion: 1, products: [], dailySales: [], saleEntries: [] });
 const CLP = new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
-const $ = (selector) => document.querySelector(selector);
 const byId = (id) => document.getElementById(id);
 const todayISO = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`; };
 const monthISO = () => todayISO().slice(0, 7);
@@ -15,7 +14,10 @@ const Storage = {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) { const fresh = EMPTY_DB(); this.save(fresh); return fresh; }
       const parsed = JSON.parse(raw);
-      if (parsed?.schemaVersion === 1 && Array.isArray(parsed.products) && Array.isArray(parsed.dailySales)) return parsed;
+      if (parsed?.schemaVersion !== 1 || !Array.isArray(parsed.products) || !Array.isArray(parsed.dailySales)) throw new Error('La base guardada no tiene la estructura requerida.');
+      if (parsed.saleEntries === undefined) { parsed.saleEntries = []; this.save(parsed); }
+      if (!Array.isArray(parsed.saleEntries)) throw new Error('La lista de ventas individuales no es válida.');
+      return parsed;
       return EMPTY_DB();
     } catch (error) { console.error('No se pudo leer el almacenamiento local.', error); return EMPTY_DB(); }
   },
@@ -29,6 +31,9 @@ let db = Storage.load();
 let activeTab = 'catalog';
 let toastTimer;
 let pendingQuantities = new Map();
+let editingSale = null;
+let editingItemSnapshots = new Map();
+let editingKind = null;
 
 const Products = {
   active() { return db.products.filter((product) => product.active); },
@@ -52,47 +57,102 @@ const Products = {
   }
 };
 
-// Sales: cantidades en edición se reconstruyen a partir de la jornada guardada.
+// Sales: las jornadas antiguas y las ventas individuales mantienen historiales separados.
 const Sales = {
   find(date) { return db.dailySales.find((sale) => sale.date === date); },
-  loadDraft(date) {
-    const sale = this.find(date);
-    pendingQuantities = new Map();
+  entries(date) { return db.saleEntries.filter((sale) => sale.date === date).sort((a, b) => a.time.localeCompare(b.time) || a.createdAt.localeCompare(b.createdAt)); },
+  currentItems() {
+    const items = [];
     for (const product of Products.active()) {
-      const saved = sale?.items.find((item) => item.productId === product.id);
-      pendingQuantities.set(product.id, saved?.quantity || 0);
+      const quantity = pendingQuantities.get(product.id) || 0;
+      if (!quantity) continue;
+      const original = editingItemSnapshots.get(product.id);
+      const unitPrice = original?.unitPrice ?? product.price;
+      const productName = original?.productName ?? product.name;
+      items.push({ productId: product.id, productName, unitPrice, quantity, subtotal: unitPrice * quantity });
     }
+    for (const [productId, original] of editingItemSnapshots) {
+      if (Products.active().some((product) => product.id === productId) || !original.quantity) continue;
+      const quantity = pendingQuantities.get(productId) || 0;
+      if (quantity) items.push({ ...original, quantity, subtotal: original.unitPrice * quantity });
+    }
+    return items;
+  },
+  fillQuantities(items) {
+    pendingQuantities = new Map(Products.active().map((product) => [product.id, 0]));
+    for (const item of items || []) pendingQuantities.set(item.productId, item.quantity);
     this.renderProducts(); this.renderTotals();
   },
-  calculate(date) {
-    const items = Products.active().map((product) => {
-      const quantity = pendingQuantities.get(product.id) || 0;
-      return { productId: product.id, productName: product.name, unitPrice: product.price, quantity, subtotal: product.price * quantity };
-    }).filter((item) => item.quantity > 0);
-    return { items, totalAmount: items.reduce((sum, item) => sum + item.subtotal, 0), totalPackages: items.reduce((sum, item) => sum + item.quantity, 0), date };
+  loadDraft(date) {
+    if (editingSale) this.cancelEdit(false);
+    this.fillQuantities([]); this.renderEntries(date);
   },
-  upsert(date) {
-    const totals = this.calculate(date); const old = this.find(date);
-    const sale = { id: old?.id || makeId(), date, ...totals, updatedAt: new Date().toISOString() };
-    const index = db.dailySales.findIndex((entry) => entry.date === date);
-    if (index >= 0) db.dailySales[index] = sale; else db.dailySales.push(sale);
-    return Storage.save(db);
+  calculate() {
+    const items = this.currentItems();
+    return { items, totalAmount: items.reduce((sum, item) => sum + item.subtotal, 0), totalPackages: items.reduce((sum, item) => sum + item.quantity, 0) };
   },
-  remove(date) { db.dailySales = db.dailySales.filter((sale) => sale.date !== date); return Storage.save(db); },
+  saveEntry(date) {
+    const totals = this.calculate(); const now = new Date(); const stamp = now.toISOString();
+    const sale = { id: editingSale?.id || makeId(), date, time: editingSale ? byId('saleTime').value : `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`, ...totals, createdAt: editingSale?.createdAt || stamp, updatedAt: stamp };
+    if (editingSale && editingKind === 'entry') { const index = db.saleEntries.findIndex((entry) => entry.id === editingSale.id); if (index >= 0) db.saleEntries[index] = sale; }
+    else if (editingSale && editingKind === 'daily') { const index = db.dailySales.findIndex((entry) => entry.id === editingSale.id); if (index >= 0) db.dailySales[index] = { ...sale, updatedAt: stamp }; }
+    else db.saleEntries.push(sale);
+    const wasEditing = Boolean(editingSale);
+    if (!Storage.save(db)) return false;
+    this.finishEdit(); this.fillQuantities([]); this.renderEntries(date); this.renderTotals();
+    return wasEditing ? 'edited' : 'created';
+  },
+  removeEntry(id) { db.saleEntries = db.saleEntries.filter((sale) => sale.id !== id); const saved = Storage.save(db); if (saved) { this.renderEntries(byId('saleDate').value); Reports.render(byId('reportMonth').value); } return saved; },
+  remove(date) { db.dailySales = db.dailySales.filter((sale) => sale.date !== date); const saved = Storage.save(db); if (saved) { this.renderEntries(date); Reports.render(byId('reportMonth').value); } return saved; },
+  beginEdit(sale, kind) {
+    editingSale = sale; editingKind = kind; editingItemSnapshots = new Map(sale.items.map((item) => [item.productId, item]));
+    this.fillQuantities(sale.items); byId('saleTimeField').classList.toggle('hidden', kind === 'daily');
+    byId('saleTime').value = sale.time || '12:00'; byId('saveSaleButton').textContent = 'Guardar cambios'; byId('saveSaleButton').disabled = false;
+    byId('cancelEditButton').classList.remove('hidden'); byId('saleDateHint').textContent = 'Editando una venta guardada.'; this.renderEntries(byId('saleDate').value);
+  },
+  finishEdit() {
+    editingSale = null; editingKind = null; editingItemSnapshots = new Map();
+    byId('saleTimeField').classList.add('hidden'); byId('saveSaleButton').textContent = 'Registrar venta'; byId('cancelEditButton').classList.add('hidden');
+  },
+  cancelEdit() { this.finishEdit(); this.fillQuantities([]); this.renderEntries(byId('saleDate').value); byId('saleDateHint').textContent = 'Edición cancelada.'; },
+  renderEntries(date) {
+    const list = byId('saleEntriesList'); list.replaceChildren();
+    const dayEntries = this.entries(date); const daily = this.find(date);
+    const total = dayEntries.reduce((sum, sale) => sum + sale.totalAmount, 0) + (daily?.totalAmount || 0);
+    byId('registeredDayTotal').textContent = CLP.format(total);
+    for (const sale of [...dayEntries].sort((a, b) => b.time.localeCompare(a.time))) list.append(this.entryRow(sale, false));
+    if (daily) list.append(this.entryRow(daily, true));
+    byId('saleEntriesEmpty').classList.toggle('hidden', dayEntries.length > 0 || !daily);
+  },
+  entryRow(sale, daily) {
+    const row = document.createElement('article'); row.className = 'sale-entry-row';
+    const details = document.createElement('div'); details.className = 'sale-entry-details';
+    const when = document.createElement('strong'); when.textContent = daily ? 'Jornada completa (sin hora)' : sale.time;
+    const summary = document.createElement('span'); summary.textContent = sale.items.map((item) => `${item.quantity} × ${item.productName}`).join(', ');
+    const amount = document.createElement('b'); amount.textContent = CLP.format(sale.totalAmount); details.append(when, summary, amount);
+    const actions = document.createElement('div'); actions.className = 'sale-entry-actions';
+    const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'small-action'; edit.textContent = 'Editar'; edit.addEventListener('click', () => this.beginEdit(sale, daily ? 'daily' : 'entry'));
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'small-action delete'; remove.textContent = 'Eliminar'; remove.addEventListener('click', () => { if (!confirm(`¿Eliminar esta ${daily ? 'jornada' : 'venta'} del ${formatDate(sale.date)}? Esta acción no se puede deshacer.`)) return; if (daily ? this.remove(sale.date) : this.removeEntry(sale.id)) showToast('Registro eliminado'); });
+    actions.append(edit, remove); row.append(details, actions); return row;
+  },
   renderProducts() {
     const list = byId('salesList'); list.replaceChildren();
-    for (const product of Products.active()) {
+    const visibleProducts = [...Products.active()];
+    for (const [productId, item] of editingItemSnapshots) if (!visibleProducts.some((product) => product.id === productId)) visibleProducts.push({ id: productId, name: item.productName, price: item.unitPrice, packageGrams: 80, active: false });
+    for (const product of visibleProducts) {
       const card = document.createElement('article'); card.className = 'sales-product-card';
       const info = document.createElement('div'); info.className = 'product-info';
       const name = document.createElement('h3'); name.textContent = product.name;
-      const price = document.createElement('span'); price.className = 'product-price'; price.textContent = `${CLP.format(product.price)} · 80 g`;
-      const subtotal = document.createElement('p'); subtotal.className = 'muted item-subtotal'; subtotal.textContent = `Subtotal: ${CLP.format(product.price * (pendingQuantities.get(product.id) || 0))}`;
+      const original = editingItemSnapshots.get(product.id); const shownPrice = original?.unitPrice ?? product.price;
+      const price = document.createElement('span'); price.className = 'product-price'; price.textContent = `${CLP.format(shownPrice)} · 80 g${product.active ? '' : ' · dado de baja'}`;
+      const subtotal = document.createElement('p'); subtotal.className = 'muted item-subtotal'; subtotal.textContent = `Subtotal: ${CLP.format(shownPrice * (pendingQuantities.get(product.id) || 0))}`;
       info.append(name, price, subtotal);
       const controls = document.createElement('div'); controls.className = 'quantity-control';
       const minus = document.createElement('button'); minus.className = 'quantity-button'; minus.type = 'button'; minus.textContent = '−'; minus.setAttribute('aria-label', `Restar ${product.name}`);
       const input = document.createElement('input'); input.className = 'quantity-input'; input.type = 'number'; input.min = '0'; input.step = '1'; input.inputMode = 'numeric'; input.value = String(pendingQuantities.get(product.id) || 0); input.setAttribute('aria-label', `Cantidad de ${product.name}`);
       const plus = document.createElement('button'); plus.className = 'quantity-button'; plus.type = 'button'; plus.textContent = '+'; plus.setAttribute('aria-label', `Sumar ${product.name}`);
-      const update = (value) => { const quantity = Number.isInteger(value) && value >= 0 ? value : 0; pendingQuantities.set(product.id, quantity); input.value = String(quantity); subtotal.textContent = `Subtotal: ${CLP.format(product.price * quantity)}`; this.renderTotals(); };
+      if (!product.active && editingSale) { minus.disabled = true; plus.disabled = true; input.disabled = true; }
+      const update = (value) => { const quantity = Number.isInteger(value) && value >= 0 ? value : 0; pendingQuantities.set(product.id, quantity); input.value = String(quantity); subtotal.textContent = `Subtotal: ${CLP.format(shownPrice * quantity)}`; this.renderTotals(); };
       minus.addEventListener('click', () => update((pendingQuantities.get(product.id) || 0) - 1)); plus.addEventListener('click', () => update((pendingQuantities.get(product.id) || 0) + 1));
       input.addEventListener('input', () => { if (input.value === '') { pendingQuantities.set(product.id, 0); subtotal.textContent = `Subtotal: ${CLP.format(0)}`; this.renderTotals(); return; } const value = Number(input.value); if (Number.isInteger(value) && value >= 0) update(value); });
       input.addEventListener('blur', () => { if (!input.value || !Number.isInteger(Number(input.value)) || Number(input.value) < 0) update(0); });
@@ -100,16 +160,19 @@ const Sales = {
     }
     byId('salesEmpty').classList.toggle('hidden', Products.active().length > 0);
   },
-  renderTotals() { const totals = this.calculate(byId('saleDate').value); byId('saleTotal').textContent = CLP.format(totals.totalAmount); byId('packageTotal').textContent = String(totals.totalPackages); byId('clearSaleButton').disabled = !this.find(byId('saleDate').value); }
+  renderTotals() { const totals = this.calculate(); byId('saleTotal').textContent = CLP.format(totals.totalAmount); byId('packageTotal').textContent = String(totals.totalPackages); byId('saveSaleButton').disabled = totals.totalPackages === 0; }
 };
 
-// Reports: todos los valores se derivan de jornadas guardadas.
+// Reports: todos los valores se derivan de ambos tipos de registros.
 const Reports = {
   render(month) {
-    const sales = db.dailySales.filter((sale) => sale.date.startsWith(month));
+    const daily = db.dailySales.filter((sale) => sale.date.startsWith(month));
+    const entries = db.saleEntries.filter((sale) => sale.date.startsWith(month));
+    const sales = [...daily, ...entries];
     const total = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
     const packages = sales.reduce((sum, sale) => sum + sale.totalPackages, 0);
-    byId('monthTotal').textContent = CLP.format(total); byId('monthPackages').textContent = String(packages); byId('monthDays').textContent = String(sales.length); byId('monthAverage').textContent = CLP.format(sales.length ? Math.round(total / sales.length) : 0);
+    const dates = new Set(sales.map((sale) => sale.date));
+    byId('monthTotal').textContent = CLP.format(total); byId('monthPackages').textContent = String(packages); byId('monthDays').textContent = String(dates.size); byId('monthAverage').textContent = CLP.format(dates.size ? Math.round(total / dates.size) : 0);
     const products = new Map();
     for (const sale of sales) for (const item of sale.items) {
       const row = products.get(item.productId) || { name: item.productName, packages: 0, income: 0 };
@@ -124,7 +187,9 @@ const Reports = {
       for (const item of ordered) { const row = document.createElement('tr'); for (const value of [item.name, String(item.packages), CLP.format(item.income)]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); } body.append(row); }
       table.append(head, body); byId('productReport').append(table);
     }
-    const dayList = byId('dayReport'); dayList.replaceChildren(); const sorted = [...sales].sort((a, b) => b.date.localeCompare(a.date));
+    const perDay = new Map();
+    for (const sale of sales) { const row = perDay.get(sale.date) || { date: sale.date, totalAmount: 0, totalPackages: 0 }; row.totalAmount += sale.totalAmount; row.totalPackages += sale.totalPackages; perDay.set(sale.date, row); }
+    const dayList = byId('dayReport'); dayList.replaceChildren(); const sorted = [...perDay.values()].sort((a, b) => b.date.localeCompare(a.date));
     byId('dayReportEmpty').classList.toggle('hidden', sorted.length > 0);
     for (const sale of sorted) { const row = document.createElement('button'); row.type = 'button'; row.className = 'day-row'; row.dataset.date = sale.date; const date = document.createElement('time'); date.dateTime = sale.date; date.textContent = formatDate(sale.date); const count = document.createElement('span'); count.className = 'day-packages'; count.textContent = `${sale.totalPackages} paquetes`; const amount = document.createElement('strong'); amount.textContent = CLP.format(sale.totalAmount); const arrow = document.createElement('span'); arrow.className = 'day-arrow'; arrow.textContent = '›'; row.append(date, count, amount, arrow); dayList.append(row); }
   }
@@ -162,9 +227,9 @@ byId('productForm').addEventListener('submit', (event) => {
   try { const saved = id ? Products.edit(id, name, price) : Products.add(name, price); if (saved) { byId('productDialog').close(); renderCatalog(); Sales.loadDraft(byId('saleDate').value); showToast(id ? 'Producto actualizado' : 'Producto agregado'); } }
   catch (error) { byId('productFormError').textContent = error.message; }
 });
-byId('saleDate').value = todayISO(); byId('reportMonth').value = monthISO(); byId('saleDate').addEventListener('change', () => { const sale = Sales.find(byId('saleDate').value); byId('saleDateHint').textContent = sale ? 'Jornada existente · los cambios reemplazarán este día al guardar.' : 'Nueva jornada para esta fecha.'; Sales.loadDraft(byId('saleDate').value); });
-byId('saveSaleButton').addEventListener('click', () => { if (Sales.upsert(byId('saleDate').value)) { byId('saleDateHint').textContent = 'Jornada guardada.'; showToast('Jornada guardada'); } });
-byId('clearSaleButton').addEventListener('click', () => { const date = byId('saleDate').value; if (!Sales.find(date)) return; if (confirm(`¿Borrar la jornada del ${formatDate(date)}? Esta acción no se puede deshacer.`) && Sales.remove(date)) { Sales.loadDraft(date); byId('saleDateHint').textContent = 'Jornada borrada.'; showToast('Jornada borrada'); } });
+byId('saleDate').value = todayISO(); byId('reportMonth').value = monthISO(); byId('saleDate').addEventListener('change', () => { Sales.loadDraft(byId('saleDate').value); byId('saleDateHint').textContent = 'Registra cada venta por separado; la jornada antigua se conserva como registro histórico.'; });
+byId('saveSaleButton').addEventListener('click', () => { const date = byId('saleDate').value; const wasEditing = Boolean(editingSale); const result = Sales.saveEntry(date); if (result) { byId('saleDateHint').textContent = wasEditing ? 'Cambios guardados.' : 'Venta registrada. Puedes ingresar la siguiente.'; Reports.render(byId('reportMonth').value); showToast(wasEditing ? 'Cambios guardados' : 'Venta registrada'); } });
+byId('cancelEditButton').addEventListener('click', () => Sales.cancelEdit());
 byId('reportMonth').addEventListener('change', () => Reports.render(byId('reportMonth').value));
 byId('dayReport').addEventListener('click', (event) => { const row = event.target.closest('.day-row'); if (!row) return; byId('saleDate').value = row.dataset.date; byId('saleDate').dispatchEvent(new Event('change')); setTab('sales'); });
 byId('exportButton').addEventListener('click', () => { const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `delicias_saludables_de_sharito_respaldo_${todayISO()}.json`; link.click(); URL.revokeObjectURL(url); document.querySelector('.more-menu').open = false; showToast('Respaldo descargado'); });
@@ -176,9 +241,12 @@ byId('importFile').addEventListener('change', async (event) => {
     if (imported?.schemaVersion !== 1 || !Array.isArray(imported.products) || !Array.isArray(imported.dailySales)) throw new Error('El archivo no tiene una estructura válida.');
     const validProducts = imported.products.every((p) => p && typeof p.id === 'string' && typeof p.name === 'string' && Number.isInteger(p.price) && p.price > 0 && Number.isInteger(p.packageGrams) && typeof p.active === 'boolean' && typeof p.createdAt === 'string');
     const validSales = imported.dailySales.every((s) => s && typeof s.id === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.date) && Array.isArray(s.items) && Number.isInteger(s.totalAmount) && Number.isInteger(s.totalPackages) && typeof s.updatedAt === 'string' && s.items.every((i) => typeof i.productId === 'string' && typeof i.productName === 'string' && Number.isInteger(i.unitPrice) && Number.isInteger(i.quantity) && i.quantity > 0 && Number.isInteger(i.subtotal)));
-    if (!validProducts || !validSales || new Set(imported.dailySales.map((sale) => sale.date)).size !== imported.dailySales.length) throw new Error('El archivo contiene datos incompletos o fechas duplicadas.');
+    const incomingEntries = imported.saleEntries === undefined ? [] : imported.saleEntries;
+    const validEntries = Array.isArray(incomingEntries) && incomingEntries.every((s) => s && typeof s.id === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.date) && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(s.time) && Array.isArray(s.items) && Number.isInteger(s.totalAmount) && Number.isInteger(s.totalPackages) && typeof s.createdAt === 'string' && typeof s.updatedAt === 'string' && s.items.every((i) => typeof i.productId === 'string' && typeof i.productName === 'string' && Number.isInteger(i.unitPrice) && i.unitPrice >= 0 && Number.isInteger(i.quantity) && i.quantity > 0 && Number.isInteger(i.subtotal) && i.subtotal === i.unitPrice * i.quantity)) && incomingEntries.every((s) => s.totalPackages === s.items.reduce((sum, i) => sum + i.quantity, 0) && s.totalAmount === s.items.reduce((sum, i) => sum + i.subtotal, 0)) && new Set(incomingEntries.map((sale) => sale.id)).size === incomingEntries.length;
+    if (!validProducts || !validSales || !validEntries || new Set(imported.dailySales.map((sale) => sale.date)).size !== imported.dailySales.length) throw new Error('El archivo contiene datos incompletos o fechas duplicadas.');
     if (!confirm('Importar este respaldo reemplazará todos los datos guardados en este dispositivo. ¿Continuar?')) return;
-    db = { schemaVersion: 1, products: imported.products, dailySales: imported.dailySales };
+    db = { schemaVersion: 1, products: imported.products, dailySales: imported.dailySales, saleEntries: incomingEntries };
+    editingSale = null; editingItemSnapshots = new Map();
     if (Storage.save(db)) { renderCatalog(); Sales.loadDraft(byId('saleDate').value); Reports.render(byId('reportMonth').value); showToast('Respaldo importado'); }
   } catch (error) { alert(`No se pudo importar el respaldo: ${error.message}`); }
 });

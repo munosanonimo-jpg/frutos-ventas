@@ -37,12 +37,18 @@
       <div class="section-heading"><div><p class="eyebrow">REGISTRO DIARIO</p><h2 id="salesHeading">Vender hoy</h2></div><span class="today-dot" aria-hidden="true"></span></div>
       <label class="field date-field"><span>Fecha de la jornada</span><input id="saleDate" type="date"></label>
       <p id="saleDateHint" class="muted date-hint"></p>
+      <label id="saleTimeField" class="field date-field hidden"><span>Hora de la venta</span><input id="saleTime" type="time" value="12:00"></label>
       <div id="salesList" class="card-list sales-list"></div>
       <div id="salesEmpty" class="empty-state compact"><span class="empty-icon" aria-hidden="true">🧺</span><h3>No hay productos activos</h3><p>Agrega productos en el catálogo para comenzar.</p><button class="text-button" type="button" data-goto="catalog">Ir al catálogo</button></div>
+      <section class="sale-entries-section" aria-labelledby="saleEntriesHeading">
+        <div class="sale-entries-heading"><div><p class="eyebrow">HISTORIAL DEL DÍA</p><h3 id="saleEntriesHeading">Ventas de este día</h3></div><strong id="registeredDayTotal">$0</strong></div>
+        <div id="saleEntriesList" class="sale-entry-list"></div>
+        <p id="saleEntriesEmpty" class="inline-empty">Aún no hay ventas registradas para esta fecha.</p>
+      </section>
       <div class="sales-spacer"></div>
       <aside class="sales-dock" aria-label="Totales y acciones de la jornada">
-        <div class="dock-totals"><div><span>Total del día</span><strong id="saleTotal">$0</strong></div><div class="package-total"><strong id="packageTotal">0</strong><span>paquetes</span></div></div>
-        <div class="dock-actions"><button id="clearSaleButton" class="button button-light" type="button" disabled>Borrar jornada</button><button id="saveSaleButton" class="button button-primary" type="button">Guardar jornada</button></div>
+        <div class="dock-totals"><div><span>Total de la venta</span><strong id="saleTotal">$0</strong></div><div class="package-total"><strong id="packageTotal">0</strong><span>paquetes</span></div></div>
+        <div class="dock-actions"><button id="cancelEditButton" class="button button-light hidden" type="button">Cancelar edición</button><button id="saveSaleButton" class="button button-primary" type="button" disabled>Registrar venta</button></div>
       </aside>
     </section>
 
