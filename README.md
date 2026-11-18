@@ -1,6 +1,6 @@
 # Delicias Saludables de Sharito · Control de ventas
 
-Aplicación web progresiva para administrar un catálogo de paquetes de frutos secos, registrar ventas por jornada y revisar el resumen mensual. Los datos se guardan localmente en el navegador; usa **Exportar respaldo** para conservar una copia.
+Aplicación web progresiva de Delicias Saludables de Sharito para administrar productos, registrar ventas por jornada y revisar el resumen mensual. Los datos se guardan localmente en el navegador; usa **Exportar respaldo** para conservar una copia.
 
 ## Cómo abrir
 
