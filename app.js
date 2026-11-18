@@ -317,17 +317,17 @@ const Reports = {
     byId('monthTotal').textContent = CLP.format(total); byId('monthPackages').textContent = String(packages); byId('monthDays').textContent = String(dates.size); byId('monthAverage').textContent = CLP.format(dates.size ? Math.round(total / dates.size) : 0);
     const products = new Map();
     for (const sale of sales) for (const item of sale.items) {
-      const row = products.get(item.productId) || { name: item.productName, packages: 0, income: 0, gross: 0, hasCost: false, hasUnknownCost: false };
+      const row = products.get(item.productId) || { name: item.productName, packages: 0, income: 0, gross: 0, hasCost: false, hasUnknownCost: false, unknownPackages: 0 };
       row.packages += item.quantity; row.income += item.subtotal;
       if (Number.isInteger(item.unitCost) && item.unitCost >= 0) { row.gross += item.subtotal - item.unitCost * item.quantity; row.hasCost = true; }
-      else row.hasUnknownCost = true;
+      else { row.hasUnknownCost = true; row.unknownPackages += item.quantity; }
       products.set(item.productId, row);
     }
     const expenseMonth = db.expenses.filter((expense) => expense.date.startsWith(month));
-    let costSold = 0; let grossProfit = 0; let unknownPackages = 0;
+    let costSold = 0; let grossProfit = 0; let unknownPackages = 0; let unknownIncome = 0;
     for (const sale of sales) for (const item of sale.items) {
       if (Number.isInteger(item.unitCost) && item.unitCost >= 0) { costSold += item.unitCost * item.quantity; grossProfit += item.subtotal - item.unitCost * item.quantity; }
-      else unknownPackages += item.quantity;
+      else { unknownPackages += item.quantity; unknownIncome += item.subtotal; }
     }
     const operatingExpenses = expenseMonth.filter((expense) => expense.category !== 'mercaderia').reduce((sum, expense) => sum + expense.amount, 0);
     const merchandisePurchases = expenseMonth.filter((expense) => expense.category === 'mercaderia').reduce((sum, expense) => sum + expense.amount, 0);
@@ -337,15 +337,19 @@ const Reports = {
     const net = grossProfit - operatingExpenses;
     byId('monthNetProfit').textContent = `${net < 0 ? '−' : ''}${CLP.format(Math.abs(net))}`;
     byId('monthMerchandise').textContent = `Compras de mercadería: ${CLP.format(merchandisePurchases)}`;
-    byId('unknownCostNote').textContent = unknownPackages ? `${unknownPackages} paquetes sin costo definido no están incluidos en la ganancia` : '';
-    byId('unknownCostNote').classList.toggle('hidden', unknownPackages === 0);
+    byId('monthUnknownIncome').textContent = CLP.format(unknownIncome);
+    const packageLabel = unknownPackages === 1 ? '1 paquete' : `${unknownPackages} paquetes`;
+    byId('monthUnknownPackages').textContent = unknownPackages ? `${packageLabel} · Ganancia sin calcular` : '';
+    byId('unknownCostCard').classList.toggle('hidden', unknownPackages === 0);
+    byId('unknownCostNote').textContent = unknownPackages > 0 && total > 0 ? `La ganancia cubre el ${Math.round(((total - unknownIncome) / total) * 100)} % de lo vendido este mes. El resto no tiene costo definido y no está incluido.` : '';
+    byId('unknownCostNote').classList.toggle('hidden', unknownPackages === 0 || total <= 0);
     const ordered = [...products.values()].sort((a, b) => b.income - a.income);
     byId('productReport').replaceChildren(); byId('productReportEmpty').classList.toggle('hidden', ordered.length > 0);
     if (ordered.length) {
       const table = document.createElement('table'); const head = document.createElement('thead'); const headerRow = document.createElement('tr');
       for (const label of ['Producto', 'Paquetes', 'Ingresos', 'Ganancia']) { const th = document.createElement('th'); th.textContent = label; headerRow.append(th); }
       head.append(headerRow); const body = document.createElement('tbody');
-      for (const item of ordered) { const row = document.createElement('tr'); for (const value of [item.name, String(item.packages), CLP.format(item.income), item.hasCost && !item.hasUnknownCost ? CLP.format(item.gross) : '—']) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); } body.append(row); }
+      for (const item of ordered) { const row = document.createElement('tr'); for (const value of [item.name, String(item.packages), CLP.format(item.income)]) { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); } const profitCell = document.createElement('td'); if (!item.hasCost) profitCell.textContent = 'Sin calcular'; else { profitCell.textContent = CLP.format(item.gross); if (item.hasUnknownCost) { const note = document.createElement('small'); note.textContent = `+ ${item.unknownPackages} paq. sin costo`; profitCell.append(note); } } row.append(profitCell); body.append(row); }
       table.append(head, body); byId('productReport').append(table);
     }
     const perDay = new Map();

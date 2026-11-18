@@ -48,3 +48,5 @@ html{scroll-padding-top:96px}.section-heading{scroll-margin-top:96px}
 @media(prefers-reduced-motion:reduce){.grams-chip span{transition:none}}
 
 
+
+.metric-unknown{grid-column:1/-1;width:100%;min-height:auto;margin-top:10px;background:#fbf3e8;border-color:#ead9bf}.metric-unknown>span,.metric-unknown small{color:#805a2d}.metric-unknown.hidden{display:none}.product-report td small{display:block;font-size:11px;color:#805a2d}
