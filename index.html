@@ -62,13 +62,43 @@
         <article class="metric-card"><span>Promedio por día con venta</span><strong id="monthAverage">$0</strong><small>Por jornada</small></article>
       </div>
       <section class="report-section"><div class="subheading"><div><p class="eyebrow">RENDIMIENTO</p><h3>Por producto</h3></div></div><div id="productReport" class="table-wrap"></div><p id="productReportEmpty" class="inline-empty hidden">Aún no hay ventas este mes.</p></section>
+      <section class="report-section"><div class="subheading"><div><p class="eyebrow">COSTOS Y RESULTADO</p><h3>Ganancia estimada</h3></div></div>
+        <div class="metrics-grid profit-grid">
+          <article class="metric-card"><span>Costo de lo vendido</span><strong id="monthCostSold">$0</strong><small>Ítems con costo conocido</small></article>
+          <article class="metric-card"><span>Ganancia bruta</span><strong id="monthGrossProfit">$0</strong><small>Ventas menos su costo</small></article>
+          <article class="metric-card"><span>Gastos del mes</span><strong id="monthExpenses">$0</strong><small>Sin mercadería</small></article>
+          <article class="metric-card metric-featured"><span>Ganancia neta estimada</span><strong id="monthNetProfit">$0</strong><small>Bruta menos gastos</small></article>
+        </div>
+        <p id="monthMerchandise" class="merchandise-note">Compras de mercadería: $0</p>
+        <p id="unknownCostNote" class="unknown-cost-note hidden"></p>
+      </section>
       <section class="report-section days-section"><div class="subheading"><div><p class="eyebrow">HISTORIAL</p><h3>Por día</h3></div></div><div id="dayReport" class="day-list"></div><p id="dayReportEmpty" class="inline-empty hidden">No hay jornadas guardadas para este mes.</p></section>
+    </section>
+
+    <section class="tab-panel hidden" id="expensesPanel" aria-labelledby="expensesHeading">
+      <div class="section-heading"><div><p class="eyebrow">SALIDAS DE DINERO</p><h2 id="expensesHeading">Gastos</h2></div><span class="summary-mark" aria-hidden="true">−</span></div>
+      <section class="expense-form-card" aria-labelledby="expenseFormHeading">
+        <h3 id="expenseFormHeading">Nuevo gasto</h3>
+        <form id="expenseForm">
+          <label class="field"><span>Fecha</span><input id="expenseDate" type="date" required></label>
+          <label class="field"><span>Categoría</span><select id="expenseCategory" required><option value="mercaderia">Mercadería</option><option value="bolsas">Bolsas y envases</option><option value="transporte">Transporte</option><option value="otros">Otros</option></select></label>
+          <label class="field"><span>Monto en CLP</span><input id="expenseAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="5000" required></label>
+          <label class="field"><span>Descripción (opcional)</span><input id="expenseDescription" type="text" maxlength="80" placeholder="Ej. Compra semanal"></label>
+          <div class="expense-form-actions"><button id="expenseCancelButton" class="button button-light hidden" type="button">Cancelar</button><button id="expenseSaveButton" class="button button-primary" type="submit">Guardar gasto</button></div>
+        </form>
+      </section>
+      <section class="report-section">
+        <div class="expense-month-heading"><label class="field month-field"><span>Mes de los gastos</span><input id="expenseMonth" type="month"></label><div class="expense-month-total"><span>Total del mes</span><strong id="expenseMonthTotal">$0</strong></div></div>
+        <div id="expenseList" class="expense-list"></div>
+        <div id="expenseListEmpty" class="empty-state compact"><span class="empty-icon" aria-hidden="true">🧾</span><h3>Sin gastos este mes</h3><p>Los gastos que registres aparecerán aquí.</p></div>
+      </section>
     </section>
   </main>
 
   <nav class="bottom-nav" aria-label="Navegación principal">
     <button class="nav-item active" type="button" data-tab="catalog" aria-current="page"><span aria-hidden="true">▦</span><small>Catálogo</small></button>
     <button class="nav-item" type="button" data-tab="sales"><span aria-hidden="true">＋</span><small>Vender hoy</small></button>
+    <button class="nav-item" type="button" data-tab="expenses"><span aria-hidden="true">−</span><small>Gastos</small></button>
     <button class="nav-item" type="button" data-tab="summary"><span aria-hidden="true">◷</span><small>Resumen</small></button>
   </nav>
 
@@ -78,6 +108,8 @@
       <input id="productId" type="hidden">
       <label class="field"><span>Nombre del producto</span><input id="productName" type="text" maxlength="60" placeholder="Ej. Almendras naturales" autocomplete="off" required></label>
       <label class="field"><span>Precio por paquete</span><div class="price-input"><span>$</span><input id="productPrice" type="number" min="1" step="1" inputmode="numeric" placeholder="3500" required></div></label>
+      <label class="field"><span>Costo por paquete (opcional)</span><div class="price-input"><span>$</span><input id="productCost" type="number" min="0" step="1" inputmode="numeric" placeholder="1200"></div></label>
+      <p class="cost-note">Lo que te cuesta cada paquete de 80 g</p>
       <p class="package-note"><span aria-hidden="true">✳</span> Paquete estándar de 80 g</p>
       <p id="productFormError" class="form-error" role="alert"></p>
       <div class="dialog-actions"><button class="button button-light" type="button" data-close-dialog>Cancelar</button><button class="button button-primary" type="submit">Guardar producto</button></div>
